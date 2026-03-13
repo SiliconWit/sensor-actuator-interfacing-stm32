@@ -1,0 +1,512 @@
+---
+title: "GPIO and Digital Interfacing"
+description: "Set up STM32CubeIDE, configure GPIO inputs and outputs with the HAL, and build an ultrasonic proximity alarm with relay trigger on the Blue Pill"
+contributors: "sam-macharia,lawrence-langat"
+pubDate: 2026-03-01
+tags: ["stm32", "gpio", "hc-sr04", "relay", "interrupts", "cubeide"]
+excerpt: "Create a new STM32CubeIDE project from scratch, configure GPIO pins in CubeMX, and interface digital devices including an ultrasonic sensor, relay module, buzzer, and push button. Implement hardware and software debouncing, external interrupts, and build a complete proximity alarm system."
+heroImage: "https://cdn.siliconwit.com/education/sensor-actuator-interfacing-stm32/gpio-digital-interfacing.png"
+---
+
+import TawkWidget from '../../../../components/TawkWidget.astro';
+import UniversalContentContributors from '../../../../components/UniversalContentContributors.astro';
+import InArticleAd from '../../../../components/InArticleAd.astro';
+import Copyright from '../../../../components/Copyright.astro';
+import TailwindWrapper from '../../../../components/TailwindWrapper.jsx';
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import { Card, CardGrid, Badge, Steps, LinkButton, FileTree } from '@astrojs/starlight/components';
+import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
+
+<UniversalContentContributors
+  contributors={frontmatter.contributors}
+/>
+
+Every embedded project starts with digital I/O: reading a button, lighting an LED, driving a relay. This lesson sets up STM32CubeIDE for the first time, walks through CubeMX pin configuration, and builds a proximity alarm that combines an ultrasonic distance sensor, a relay module, a buzzer, and a push button with interrupt-driven control. By the end you will have a working alarm system and a project template you can reuse for every lesson in this course. #STM32 #GPIO #Sensors
+
+## What We Are Building
+
+<Card title="Ultrasonic Proximity Alarm with Relay Trigger" icon="star">
+A proximity alarm that measures distance with an HC-SR04 ultrasonic sensor. When an object enters the threshold zone (20 cm), the relay module activates and the buzzer sounds at a frequency proportional to distance. A green LED indicates safe range; a red LED indicates close range. A push button arms and disarms the alarm through an external interrupt, so the system responds instantly regardless of what the main loop is doing.
+</Card>
+
+**Project specifications:**
+
+| Parameter | Value |
+|-----------|-------|
+| Board | Blue Pill (STM32F103C8T6, WeAct) |
+| System clock | 72 MHz (HSE 8 MHz + PLL x9) |
+| HC-SR04 Trigger | PA1 (GPIO Output) |
+| HC-SR04 Echo | PA2 (GPIO Input) |
+| Relay module IN | PA3 (GPIO Output, active low) |
+| Passive buzzer | PA4 (GPIO Output, toggled for tone) |
+| Green LED | PB0 (GPIO Output) |
+| Red LED | PB1 (GPIO Output) |
+| Push button | PB12 (GPIO Input, EXTI12, pull-up) |
+| On-board LED | PC13 (GPIO Output, active low) |
+| Debugger | ST-Link V2 clone over SWD |
+
+### Bill of Materials
+
+| Component | Quantity | Notes |
+|-----------|----------|-------|
+| Blue Pill (STM32F103C8T6) | 1 | WeAct version recommended |
+| ST-Link V2 clone | 1 | SWD programmer/debugger |
+| HC-SR04 ultrasonic sensor | 1 | 5V sensor, 3.3V compatible echo |
+| Relay module (5V, 1-channel) | 1 | Opto-isolated, active low input |
+| Passive buzzer | 1 | Driven by toggling GPIO |
+| Push button (tactile) | 1 | Normally open |
+| LEDs (green, red) | 2 | 3mm or 5mm |
+| Resistors (330 ohm) | 2 | LED current limiting |
+| Resistor (10K) | 1 | External pull-up for button |
+| Breadboard + jumper wires | 1 set | Standard full-size breadboard |
+
+## Setting Up STM32CubeIDE
+
+<InArticleAd />
+
+### Why CubeIDE + HAL for This Course
+
+The [Embedded Programming: STM32](/education/embedded-programming-stm32/) course used the bare toolchain: arm-none-eabi-gcc, OpenOCD, Makefiles, and direct register access. That approach teaches you what every bit in every register does. For interfacing, the priorities shift. You are wiring multiple external devices, configuring several peripherals at once, and spending most of your time on device driver logic rather than initialization boilerplate. CubeIDE with CubeMX gives you:
+
+- **Visual pin assignment**: select PA1 as GPIO_Output, see conflicts highlighted immediately
+- **HAL code generation**: correct initialization sequences from your configuration
+- **Integrated debugger**: click-to-set breakpoints, live variable watch, SWV trace
+- **One installation**: compiler, debugger, CubeMX, and HAL libraries bundled together
+
+**When the bare toolchain is still the right choice:** custom bootloaders where you control every byte, safety-critical firmware that must be audited line by line, extremely tight flash constraints where HAL overhead matters (under 8 KB), and CI/CD pipelines where a headless Makefile build is simpler. Both toolchains produce the same ARM binary.
+
+### Creating a New Project
+
+<Steps>
+1. **Launch STM32CubeIDE** and select a workspace folder for this course.
+
+2. **File > New > STM32 Project**. In the Target Selection dialog, type `STM32F103C8` in the search box. Select **STM32F103C8Tx** from the list, then click **Next**.
+
+3. **Name the project** `ProximityAlarm`. Select **C** as the language, **Executable** as the target type, and **STM32Cube** as the project structure. Click **Finish**.
+
+4. **CubeMX opens automatically**. You will see the chip pinout view. This is where you assign every pin before generating code.
+</Steps>
+
+### CubeMX Pin Configuration
+
+<Steps>
+1. **System Core > SYS**: set Debug to **Serial Wire**. This reserves PA13 (SWDIO) and PA14 (SWCLK) for the ST-Link.
+
+2. **System Core > RCC**: set HSE to **Crystal/Ceramic Resonator**. Go to the Clock Configuration tab and set PLL source to HSE, PLL multiplier to x9, SYSCLK to 72 MHz, APB1 prescaler to /2 (36 MHz max).
+
+3. **Configure GPIO outputs**: click each pin on the chip view and select GPIO_Output:
+   - **PA1**: HC-SR04 Trigger
+   - **PA3**: Relay module
+   - **PA4**: Buzzer
+   - **PB0**: Green LED
+   - **PB1**: Red LED
+   - **PC13**: On-board LED
+
+4. **Configure GPIO input for Echo**: click **PA2** and select GPIO_Input.
+
+5. **Configure the push button with EXTI**: click **PB12** and select **GPIO_EXTI12**. In the GPIO configuration panel, set the pull mode to **Pull-up** and the trigger to **Falling edge** (button connects to GND when pressed).
+
+6. **Enable the EXTI interrupt**: go to **System Core > NVIC** and enable **EXTI line[15:10] interrupt**. Set its priority to 1 (lower than SysTick at 0).
+
+7. **Generate code**: press **Ctrl+S** or click the gear icon. CubeIDE generates the project with all initialization code in place.
+</Steps>
+
+### Generated Project Structure
+
+<FileTree>
+- ProximityAlarm/
+  - Core/
+    - Inc/
+      - main.h
+      - stm32f1xx_hal_conf.h
+      - stm32f1xx_it.h
+    - Src/
+      - main.c
+      - stm32f1xx_hal_msp.c
+      - stm32f1xx_it.c
+      - system_stm32f1xx.c
+  - Drivers/
+    - CMSIS/
+    - STM32F1xx_HAL_Driver/
+  - ProximityAlarm.ioc
+</FileTree>
+
+All your application code goes between the `/* USER CODE BEGIN */` and `/* USER CODE END */` markers in `main.c`. CubeMX preserves these sections when you regenerate code after changing pin assignments.
+
+## GPIO Output: LEDs, Relay, and Buzzer
+
+### Driving an LED
+
+Each GPIO pin on the STM32F103 can source or sink up to 25 mA. A typical LED needs 10 to 20 mA. With a 3.3V output and a 2V forward voltage across the LED, a 330 ohm resistor sets the current to about 4 mA, which is visible and safe.
+
+```c title="LED control"
+// Turn on green LED (PB0)
+HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+
+// Turn off green LED
+HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+
+// Toggle red LED (PB1)
+HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_1);
+```
+
+### Relay Module
+
+Most single-channel relay modules are **active low**: the relay energizes when the input pin is pulled to GND. The module has an optocoupler that isolates the STM32 from the relay coil, and an on-board flyback diode to suppress the inductive spike when the coil de-energizes. The module runs on 5V (from the breadboard supply rail), but the signal input triggers at 3.3V logic levels.
+
+```c title="Relay control"
+// Activate relay (active low)
+HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_RESET);
+
+// Deactivate relay
+HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_SET);
+```
+
+### Buzzer Tone Generation
+
+A passive buzzer needs an AC signal to produce sound. Toggling a GPIO pin at a fixed frequency generates a square wave. For a simple alarm, 2 kHz is a good starting point. We will vary the frequency in the final project to indicate distance.
+
+```c title="Simple buzzer tone"
+void Buzzer_Beep(uint32_t frequency_hz, uint32_t duration_ms) {
+    uint32_t half_period_us = 500000 / frequency_hz;
+    uint32_t cycles = (frequency_hz * duration_ms) / 1000;
+    for (uint32_t i = 0; i < cycles; i++) {
+        HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_4);
+        delay_us(half_period_us);
+    }
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);
+}
+```
+
+The `delay_us` function uses the SysTick counter for microsecond delays (defined in the complete code below).
+
+## GPIO Input: Push Button with Debouncing
+
+<InArticleAd />
+
+### The Bounce Problem
+
+Mechanical switches bounce for 1 to 10 ms after contact. During this window the signal oscillates between high and low many times. Without debouncing, a single press might register as five or ten presses.
+
+### Hardware Debouncing
+
+An RC low-pass filter smooths the bounces. Place a 10K resistor in series with the button and a 100 nF capacitor from the GPIO pin to ground. The time constant is R x C = 10K x 100nF = 1 ms, which filters out bounces shorter than about 1 ms. A Schmitt trigger input (which the STM32 GPIO already has) cleans up the slow rising edge that the RC filter produces.
+
+For this project, the STM32's built-in Schmitt trigger inputs are sufficient when combined with software debouncing.
+
+### Software Debouncing
+
+The simplest approach: record the time of the last valid press and ignore any edges within a debounce window (50 ms works well).
+
+```c title="Software debounce in interrupt callback"
+volatile uint32_t last_button_tick = 0;
+volatile uint8_t alarm_armed = 1;
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    if (GPIO_Pin == GPIO_PIN_12) {
+        uint32_t now = HAL_GetTick();
+        if (now - last_button_tick > 50) {
+            alarm_armed = !alarm_armed;
+            last_button_tick = now;
+        }
+    }
+}
+```
+
+## External Interrupts (EXTI)
+
+Polling a button in the main loop wastes CPU cycles and can miss short presses if the loop is busy. The STM32's EXTI controller connects each GPIO pin to a dedicated interrupt line. When the pin sees a falling edge (button pressed, pulled to GND), the NVIC fires the interrupt handler immediately.
+
+CubeMX already configured PB12 as EXTI12 with a falling-edge trigger. The generated code in `stm32f1xx_it.c` calls `HAL_GPIO_EXTI_IRQHandler()`, which clears the pending flag and calls `HAL_GPIO_EXTI_Callback()`. You override the callback (shown above) in `main.c`.
+
+**NVIC priority:** The STM32F103 uses 4 bits for priority (0 to 15, where 0 is highest). SysTick defaults to priority 0. We set EXTI to priority 1 so it does not preempt the system tick, but still responds faster than any main-loop polling.
+
+## HC-SR04 Ultrasonic Sensor
+
+The HC-SR04 measures distance by sending a 40 kHz ultrasonic burst and timing the echo return. The interface is simple:
+
+<Steps>
+1. **Send a trigger pulse**: drive the Trigger pin HIGH for at least 10 microseconds, then LOW.
+
+2. **Wait for echo**: the sensor sets the Echo pin HIGH when the burst leaves and LOW when the echo returns.
+
+3. **Measure the pulse width**: the duration of the Echo HIGH pulse, in microseconds, gives the round-trip time.
+
+4. **Calculate distance**: distance in cm = (pulse width in us) / 58. This uses the speed of sound at 343 m/s and accounts for the round trip.
+</Steps>
+
+### Wiring Notes
+
+The HC-SR04 runs on 5V. Its Echo pin outputs a 5V signal, but the pulse width is short and most STM32F103 GPIO pins are 5V tolerant (check the datasheet for "FT" marking on PA2). If you want extra safety, add a voltage divider (1K + 2K) on the Echo line to bring it down to 3.3V.
+
+### Microsecond Delay Using SysTick
+
+The HAL provides `HAL_Delay()` with 1 ms resolution. For the 10 us trigger pulse and echo timing, we need microsecond precision. The DWT (Data Watchpoint and Trace) cycle counter gives us that:
+
+```c title="Microsecond delay using DWT"
+void DWT_Init(void) {
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
+
+void delay_us(uint32_t us) {
+    uint32_t start = DWT->CYCCNT;
+    uint32_t ticks = us * (SystemCoreClock / 1000000);
+    while ((DWT->CYCCNT - start) < ticks);
+}
+```
+
+### Distance Measurement Function
+
+```c title="HC-SR04 distance reading"
+float HCSR04_ReadDistance_cm(void) {
+    // Send 10us trigger pulse
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
+    delay_us(10);
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET);
+
+    // Wait for echo to go HIGH (timeout after 1ms)
+    uint32_t timeout = DWT->CYCCNT;
+    while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_RESET) {
+        if ((DWT->CYCCNT - timeout) > (SystemCoreClock / 1000))
+            return -1.0f;  // No echo, sensor disconnected or out of range
+    }
+
+    // Measure echo pulse width
+    uint32_t echo_start = DWT->CYCCNT;
+    while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_SET) {
+        if ((DWT->CYCCNT - echo_start) > (SystemCoreClock / 50))
+            return -1.0f;  // Timeout (~20ms, max range)
+    }
+    uint32_t echo_end = DWT->CYCCNT;
+
+    // Convert to microseconds, then to cm
+    float pulse_us = (float)(echo_end - echo_start) / (SystemCoreClock / 1000000);
+    float distance_cm = pulse_us / 58.0f;
+
+    return distance_cm;
+}
+```
+
+## Wiring Diagram
+
+<InArticleAd />
+
+| Blue Pill Pin | Connection | Notes |
+|---------------|------------|-------|
+| PA1 | HC-SR04 Trig | 3.3V logic, sensor accepts it |
+| PA2 | HC-SR04 Echo | 5V tolerant pin (FT). Add 1K+2K divider for extra safety |
+| PA3 | Relay module IN | Active low. Module VCC to 5V rail |
+| PA4 | Passive buzzer (+) | Buzzer (−) to GND |
+| PB0 | Green LED anode | Through 330 ohm resistor to GND |
+| PB1 | Red LED anode | Through 330 ohm resistor to GND |
+| PB12 | Push button | Button to GND. Internal pull-up enabled in CubeMX |
+| 3.3V | Breadboard 3.3V rail | Powers LEDs and button pull-up |
+| 5V | HC-SR04 VCC, relay VCC | From Blue Pill 5V pin (USB powered) |
+| GND | Common ground | All GNDs connected together |
+| PA13 | ST-Link SWDIO | Debug interface |
+| PA14 | ST-Link SWCLK | Debug interface |
+
+## Complete Project Code
+
+The following `main.c` is the complete application. Paste it into the generated `main.c`, keeping all content within the USER CODE markers.
+
+```c title="main.c"
+/* USER CODE BEGIN Header */
+/**
+  * Proximity Alarm - GPIO and Digital Interfacing
+  * Sensor and Actuator Interfacing with STM32, Lesson 1
+  *
+  * Measures distance with HC-SR04, drives LEDs, buzzer, and relay.
+  * Push button arms/disarms the alarm via EXTI interrupt.
+  */
+/* USER CODE END Header */
+
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+
+/* USER CODE BEGIN PV */
+volatile uint32_t last_button_tick = 0;
+volatile uint8_t alarm_armed = 1;
+
+#define THRESHOLD_CM       20.0f
+#define BUZZER_MIN_FREQ    500
+#define BUZZER_MAX_FREQ    4000
+#define MEASUREMENT_INTERVAL_MS 100
+/* USER CODE END PV */
+
+/* USER CODE BEGIN PFP */
+void DWT_Init(void);
+void delay_us(uint32_t us);
+float HCSR04_ReadDistance_cm(void);
+void Buzzer_Beep(uint32_t frequency_hz, uint32_t duration_ms);
+void UpdateAlarmOutputs(float distance_cm);
+/* USER CODE END PFP */
+
+/* USER CODE BEGIN 0 */
+void DWT_Init(void) {
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
+
+void delay_us(uint32_t us) {
+    uint32_t start = DWT->CYCCNT;
+    uint32_t ticks = us * (SystemCoreClock / 1000000);
+    while ((DWT->CYCCNT - start) < ticks);
+}
+
+float HCSR04_ReadDistance_cm(void) {
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
+    delay_us(10);
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET);
+
+    uint32_t timeout = DWT->CYCCNT;
+    while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_RESET) {
+        if ((DWT->CYCCNT - timeout) > (SystemCoreClock / 1000))
+            return -1.0f;
+    }
+
+    uint32_t echo_start = DWT->CYCCNT;
+    while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_SET) {
+        if ((DWT->CYCCNT - echo_start) > (SystemCoreClock / 50))
+            return -1.0f;
+    }
+    uint32_t echo_end = DWT->CYCCNT;
+
+    float pulse_us = (float)(echo_end - echo_start) / (SystemCoreClock / 1000000);
+    float distance_cm = pulse_us / 58.0f;
+
+    return distance_cm;
+}
+
+void Buzzer_Beep(uint32_t frequency_hz, uint32_t duration_ms) {
+    uint32_t half_period_us = 500000 / frequency_hz;
+    uint32_t cycles = (frequency_hz * duration_ms) / 1000;
+    for (uint32_t i = 0; i < cycles; i++) {
+        HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_4);
+        delay_us(half_period_us);
+    }
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);
+}
+
+void UpdateAlarmOutputs(float distance_cm) {
+    if (!alarm_armed) {
+        /* Alarm disarmed: all outputs off, on-board LED blinks slowly */
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);  /* Green off */
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET);  /* Red off */
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_SET);    /* Relay off (active low) */
+        HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);                /* Blink on-board LED */
+        return;
+    }
+
+    /* On-board LED solid on when armed */
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET); /* Active low */
+
+    if (distance_cm < 0) {
+        /* Sensor error or out of range */
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_SET);
+        return;
+    }
+
+    if (distance_cm <= THRESHOLD_CM) {
+        /* Close range: red LED on, green off, relay activated, buzzer sounds */
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_RESET); /* Relay on */
+
+        /* Buzzer frequency increases as object gets closer */
+        uint32_t freq = BUZZER_MAX_FREQ
+            - (uint32_t)((distance_cm / THRESHOLD_CM)
+            * (BUZZER_MAX_FREQ - BUZZER_MIN_FREQ));
+        if (freq < BUZZER_MIN_FREQ) freq = BUZZER_MIN_FREQ;
+        if (freq > BUZZER_MAX_FREQ) freq = BUZZER_MAX_FREQ;
+        Buzzer_Beep(freq, 50);
+    } else {
+        /* Safe range: green LED on, red off, relay off, buzzer silent */
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_SET);
+    }
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    if (GPIO_Pin == GPIO_PIN_12) {
+        uint32_t now = HAL_GetTick();
+        if (now - last_button_tick > 50) {
+            alarm_armed = !alarm_armed;
+            last_button_tick = now;
+        }
+    }
+}
+/* USER CODE END 0 */
+
+int main(void) {
+    /* USER CODE BEGIN 1 */
+    /* USER CODE END 1 */
+
+    HAL_Init();
+    SystemClock_Config();
+    MX_GPIO_Init();
+
+    /* USER CODE BEGIN 2 */
+    DWT_Init();
+
+    /* Start with relay off (active low, so set HIGH) */
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_SET);
+    /* Buzzer off */
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);
+    /* USER CODE END 2 */
+
+    /* USER CODE BEGIN WHILE */
+    while (1) {
+        float distance = HCSR04_ReadDistance_cm();
+        UpdateAlarmOutputs(distance);
+        HAL_Delay(MEASUREMENT_INTERVAL_MS);
+        /* USER CODE END WHILE */
+    }
+    /* USER CODE BEGIN 3 */
+    /* USER CODE END 3 */
+}
+```
+
+### How the Code Works
+
+<Steps>
+1. **DWT_Init** enables the cycle counter for microsecond-accurate timing. This counter runs at the core clock speed (72 MHz) and wraps around every ~59 seconds, which is more than enough for our measurements.
+
+2. **HCSR04_ReadDistance_cm** sends a 10 us trigger pulse, measures the echo pulse width using the cycle counter, and converts to centimeters. Timeouts prevent the function from blocking if the sensor is disconnected.
+
+3. **UpdateAlarmOutputs** checks the distance against the threshold and drives all outputs accordingly. When disarmed, all outputs turn off and the on-board LED blinks.
+
+4. **HAL_GPIO_EXTI_Callback** fires on the falling edge of PB12 (button press). Software debouncing ignores presses within 50 ms of the last valid press. The `alarm_armed` flag toggles between armed and disarmed states.
+
+5. **The main loop** reads the sensor every 100 ms and updates outputs. The HC-SR04 needs at least 60 ms between measurements for reliable readings, so 100 ms is a safe interval.
+</Steps>
+
+## Production Notes
+
+<Card title="Moving from Breadboard to PCB" icon="setting">
+
+**ESD protection on GPIO pins.** Any pin connected to an external cable or connector is exposed to electrostatic discharge. Add TVS diodes (e.g., PESD5V0S1BA) on the HC-SR04 echo line and the button input. Cost: a few cents per pin.
+
+**Relay flyback diode.** The relay module includes a flyback diode on the PCB. If you use a bare relay coil, you must add a 1N4148 diode across the coil (cathode to positive terminal) to absorb the inductive voltage spike when the relay turns off.
+
+**Sensor placement.** The HC-SR04 has a 15-degree cone angle. Mount it perpendicular to the surface you want to detect. Avoid placing it near walls or corners that create false echoes. The minimum measurable distance is about 2 cm.
+
+**Power supply decoupling.** Place 100 nF ceramic capacitors close to the VCC pin of every IC and module. The relay module draws a current spike when energizing; if this pulls the 5V rail down, it can cause the STM32 to brown out. A 470 uF electrolytic on the 5V rail helps.
+
+**GPIO drive strength.** CubeMX defaults to the maximum output speed. For signals that do not need fast edges (LEDs, relay), set the speed to Low. This reduces EMI and ringing on long PCB traces.
+
+</Card>
+
+:::tip[Testing without the relay]
+If you do not have a relay module yet, connect PA3 to an LED through a 330 ohm resistor instead. The logic is inverted (LED lights when active low), but you can verify the alarm logic works before adding the relay.
+:::
+
+<Copyright />
+<SensorActuatorInterfacingStm32Comments />
+<TawkWidget />

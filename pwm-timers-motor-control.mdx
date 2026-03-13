@@ -1,0 +1,606 @@
+---
+title: "PWM, Timers, and Motor Control"
+description: "Generate PWM signals with STM32 hardware timers for servo positioning, DC motor speed control via L298N H-bridge, and audio tone generation. Use input capture to measure external signal frequency and build a potentiometer-controlled pan-tilt mount."
+contributors: "sam-macharia,lawrence-langat"
+pubDate: 2026-03-03
+tags: ["stm32", "pwm", "timers", "servo", "motor-control", "l298n", "buzzer", "input-capture", "cubemx"]
+excerpt: "Build a servo pan-tilt mount with DC motor speed control. Configure TIM2 and TIM3 for multi-channel PWM output, drive SG90 servos to precise angles, control DC motor speed and direction through an L298N H-bridge, generate buzzer tones by sweeping PWM frequency, and read potentiometers through the ADC to tie it all together."
+heroImage: "https://cdn.siliconwit.com/education/sensor-actuator-interfacing-stm32/pwm-timers-motor-control.png"
+---
+
+import TawkWidget from '../../../../components/TawkWidget.astro';
+import UniversalContentContributors from '../../../../components/UniversalContentContributors.astro';
+import InArticleAd from '../../../../components/InArticleAd.astro';
+import Copyright from '../../../../components/Copyright.astro';
+import TailwindWrapper from '../../../../components/TailwindWrapper.jsx';
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import { Card, CardGrid, Badge, Steps, LinkButton, FileTree } from '@astrojs/starlight/components';
+import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
+
+<UniversalContentContributors
+  contributors={frontmatter.contributors}
+/>
+
+Motors, servos, and buzzers all need precisely timed electrical signals to function correctly. The STM32's hardware timers generate those signals autonomously, freeing the CPU to handle sensor reads, communication, and logic. In this lesson you will configure multiple timer channels for PWM output, drive servos to exact angles, control DC motor speed through an H-bridge, play tones on a passive buzzer, and measure external signal frequencies with input capture. Two potentiometers tie it all together: one controls pan, the other controls tilt, and a button toggles the DC motor with a smooth speed ramp. #STM32 #PWM #MotorControl
+
+## What We Are Building
+
+<Card title="Servo Pan-Tilt Mount with DC Motor Speed Control" icon="star">
+A two-axis servo mount where potentiometer 1 controls the pan servo (0 to 180 degrees) and potentiometer 2 controls the tilt servo (0 to 180 degrees). A push button toggles a DC motor on and off with a gradual speed ramp through an L298N H-bridge. When either servo reaches its travel limit (0 or 180 degrees), a passive buzzer plays a short warning tone. All PWM generation runs in timer hardware with minimal CPU overhead.
+</Card>
+
+**Project specifications:**
+
+| Parameter | Value |
+|-----------|-------|
+| Board | Blue Pill (STM32F103C8T6) |
+| Pan servo | SG90 on PA0 (TIM2_CH1) |
+| Tilt servo | SG90 on PA1 (TIM2_CH2) |
+| DC motor PWM | PA6 (TIM3_CH1) to L298N ENA |
+| DC motor direction | PB0 (IN1), PB1 (IN2) |
+| Buzzer | PA7 (TIM3_CH2) |
+| Pot 1 (pan) | PA2 (ADC1_CH2) |
+| Pot 2 (tilt) | PA3 (ADC1_CH3) |
+| Button | PB10 (GPIO input, internal pull-up) |
+| Serial output | USART1 on PA9/PA10 (115200 baud) |
+
+### Bill of Materials
+
+| Component | Quantity | Notes |
+|-----------|----------|-------|
+| Blue Pill (STM32F103C8T6) | 1 | WeAct version recommended |
+| ST-Link V2 clone | 1 | SWD programmer/debugger |
+| SG90 micro servo | 2 | 4.8 to 6V operating, pan and tilt |
+| DC motor (3 to 6V) | 1 | Small brushed motor |
+| L298N motor driver module | 1 | Dual H-bridge, only one channel used |
+| Potentiometer (10K) | 2 | Analog input for servo position |
+| Passive buzzer | 1 | PWM-driven tone generation |
+| Push button | 1 | Motor on/off toggle |
+| Breadboard + jumper wires | 1 set | Assorted lengths |
+| External 5V supply | 1 | For servos if USB current is insufficient |
+
+## Timer PWM Fundamentals
+
+<InArticleAd />
+
+The STM32F103 timers generate PWM by comparing a free-running counter against a threshold value. The counter counts from 0 up to the auto-reload register (ARR), then resets. On each count, the hardware compares the counter against the capture/compare register (CCR) for each channel and sets the output pin high or low accordingly.
+
+**Key registers for PWM:**
+
+| Register | Purpose |
+|----------|---------|
+| PSC | Prescaler: divides the 72 MHz timer clock. Counter clock = 72 MHz / (PSC + 1) |
+| ARR | Auto-reload: the counter counts from 0 to ARR, then resets. Period = (ARR + 1) / counter_clock |
+| CCRx | Capture/compare for channel x: sets the duty cycle threshold |
+| CCMR1/2 | Output compare mode selection per channel |
+| CCER | Channel enable and polarity |
+
+### PWM Mode 1 vs Mode 2
+
+In **PWM mode 1**, the output is high when the counter is less than CCR and low otherwise. In **PWM mode 2**, the polarity is inverted: low when counter is less than CCR, high otherwise. For servos and motor drivers that expect active-high signals, PWM mode 1 is the standard choice.
+
+### Prescaler and ARR Calculation
+
+For a 50 Hz servo signal (20 ms period) with 1 microsecond resolution:
+
+| Parameter | Calculation | Value |
+|-----------|-------------|-------|
+| Timer clock | System clock | 72 MHz |
+| PSC | 72 MHz / 1 MHz target = 72 | 71 |
+| Counter clock | 72 MHz / (71 + 1) | 1 MHz (1 us per tick) |
+| ARR | 20 ms / 1 us = 20000 | 19999 |
+| CCR for 0 degrees | 0.5 ms / 1 us | 500 |
+| CCR for 90 degrees | 1.5 ms / 1 us | 1500 |
+| CCR for 180 degrees | 2.5 ms / 1 us | 2500 |
+
+## CubeMX Timer Configuration
+
+<InArticleAd />
+
+Open STM32CubeIDE, create a new project for the STM32F103C8Tx, and configure the peripherals in the CubeMX graphical editor.
+
+### TIM2 Setup (Servos)
+
+<Steps>
+1. In the Pinout view, click on TIM2 in the left panel. Set Channel 1 to "PWM Generation CH1" and Channel 2 to "PWM Generation CH2". CubeMX assigns PA0 and PA1 automatically.
+
+2. Switch to the Configuration tab. Under Counter Settings, set Prescaler to **71** and Counter Period (ARR) to **19999**. This gives a 50 Hz PWM with 1 us resolution.
+
+3. For Channel 1 and Channel 2, set Mode to "PWM mode 1", Pulse (initial CCR) to **1500** (90 degrees center), and CH Polarity to "High".
+
+4. Enable auto-reload preload (ARPE) under Counter Settings. This ensures ARR changes take effect at the next update event rather than mid-cycle.
+</Steps>
+
+### TIM3 Setup (Motor PWM and Buzzer)
+
+<Steps>
+1. Set TIM3 Channel 1 to "PWM Generation CH1" (PA6, motor speed) and Channel 2 to "PWM Generation CH2" (PA7, buzzer).
+
+2. For the motor PWM on Channel 1: Prescaler = **71**, Counter Period = **999**. This gives a 1 kHz PWM with 0.1% duty cycle resolution (1000 steps from 0 to 999). CCR range: 0 (stopped) to 999 (full speed).
+
+3. For the buzzer on Channel 2: the buzzer shares the same timer base, so both channels have the same frequency initially. To change the buzzer frequency for tones, you will modify TIM3 ARR dynamically in code. Set initial Pulse to **0** (buzzer off).
+
+4. Set both channels to PWM mode 1 with High polarity.
+</Steps>
+
+### ADC1 Setup (Potentiometers)
+
+<Steps>
+1. Enable ADC1 with IN2 (PA2) and IN3 (PA3) in scan conversion mode. Set the number of conversions to 2.
+
+2. In the rank configuration, set Rank 1 to Channel 2 (pan pot) and Rank 2 to Channel 3 (tilt pot). Set sampling time to 71.5 cycles for both (good balance of speed and accuracy).
+
+3. Enable "Continuous Conversion Mode" and "Scan Conversion Mode". Disable DMA for now; we will poll the values in the main loop.
+</Steps>
+
+### GPIO Setup
+
+<Steps>
+1. Set PB0 and PB1 as GPIO_Output (motor direction: IN1 and IN2 on the L298N).
+
+2. Set PB10 as GPIO_Input with internal pull-up enabled (button, active low).
+
+3. Enable USART1 in asynchronous mode at 115200 baud (PA9 TX, PA10 RX) for serial debug output.
+</Steps>
+
+## Wiring
+
+| STM32 Pin | Connects To | Function |
+|-----------|-------------|----------|
+| PA0 | Pan servo signal (orange wire) | TIM2_CH1 PWM |
+| PA1 | Tilt servo signal (orange wire) | TIM2_CH2 PWM |
+| PA2 | Pot 1 wiper (middle pin) | ADC1_CH2, pan input |
+| PA3 | Pot 2 wiper (middle pin) | ADC1_CH3, tilt input |
+| PA6 | L298N ENA pin | TIM3_CH1, motor speed PWM |
+| PA7 | Passive buzzer positive pin | TIM3_CH2, tone output |
+| PA9 | USB-Serial RX (for debug) | USART1_TX |
+| PB0 | L298N IN1 | Motor direction A |
+| PB1 | L298N IN2 | Motor direction B |
+| PB10 | Push button (other side to GND) | Motor toggle, pulled up internally |
+| 3.3V | Pot 1 and Pot 2 top pins | ADC reference |
+| GND | Pot 1 and Pot 2 bottom pins, button, buzzer GND | Common ground |
+| 5V | Servo VCC (red wires), L298N 5V logic | Servo and logic power |
+| GND | Servo GND (brown wires), L298N GND | Common ground |
+| Ext 12V | L298N motor power input (VS) | Motor power (or 5 to 6V for small motors) |
+
+:::caution[Power supply isolation]
+Do not power servos from the Blue Pill's 3.3V regulator. Servo stall current can reach 700 mA, which will brown out the MCU. Use a separate 5V supply for the servos and connect the grounds together. The L298N module has its own voltage regulator; supply motor voltage (6 to 12V) to the VS terminal and the onboard regulator provides 5V logic power.
+:::
+
+## Servo Motor Control
+
+<InArticleAd />
+
+Standard hobby servos use a 50 Hz PWM signal where the pulse width encodes the target angle. The SG90 accepts:
+
+| Pulse Width | Angle |
+|-------------|-------|
+| 0.5 ms (500 us) | 0 degrees |
+| 1.0 ms (1000 us) | 45 degrees |
+| 1.5 ms (1500 us) | 90 degrees (center) |
+| 2.0 ms (2000 us) | 135 degrees |
+| 2.5 ms (2500 us) | 180 degrees |
+
+The mapping is linear: `pulse_us = 500 + (angle * 2000) / 180`.
+
+## DC Motor with H-Bridge
+
+The L298N H-bridge controls motor direction and speed:
+
+| IN1 | IN2 | ENA (PWM) | Motor Action |
+|-----|-----|-----------|-------------|
+| HIGH | LOW | PWM duty | Forward at duty% speed |
+| LOW | HIGH | PWM duty | Reverse at duty% speed |
+| LOW | LOW | any | Coast (free spin) |
+| HIGH | HIGH | any | Brake (short circuit motor terminals) |
+
+Speed control: the PWM duty cycle on ENA determines the effective voltage applied to the motor. At 50% duty, the motor receives roughly half the supply voltage (averaged). The 1 kHz PWM frequency on TIM3_CH1 is above the audible range for most motors, reducing whine.
+
+## Passive Buzzer Tones
+
+A passive buzzer contains no internal oscillator. It produces sound at whatever frequency you drive it. To play a musical note, change the TIM3 period (ARR) to match the note frequency and set the duty cycle to 50% for maximum volume.
+
+| Note | Frequency (Hz) | ARR value (1 MHz clock) |
+|------|----------------|-------------------------|
+| C4 | 262 | 3816 |
+| D4 | 294 | 3401 |
+| E4 | 330 | 3030 |
+| F4 | 349 | 2865 |
+| G4 | 392 | 2551 |
+| A4 | 440 | 2272 |
+| B4 | 494 | 2024 |
+| C5 | 523 | 1912 |
+
+To play a tone: set `TIM3->ARR` to the note value and `TIM3->CCR2` to ARR/2 (50% duty). To stop: set `TIM3->CCR2` to 0.
+
+:::note
+Since TIM3 is shared between the motor PWM (CH1) and buzzer (CH2), changing ARR affects the motor PWM frequency too. In the complete project code, we use brief buzzer bursts (100 ms) and restore the motor ARR afterward. For a production design, you would use separate timers for motor and buzzer.
+:::
+
+## Input Capture
+
+<InArticleAd />
+
+Timer input capture mode records the counter value when an external signal edge arrives. This lets you measure the period (and thus frequency) of an external signal without software polling. The STM32 latches the counter into the CCR register on the configured edge and optionally triggers an interrupt.
+
+For this lesson, input capture is demonstrated as a debugging tool: you can measure the actual servo PWM frequency coming out of your own timer to verify the configuration, or measure an external signal from another device.
+
+To configure TIM4_CH1 (PB6) as input capture in CubeMX: set Channel 1 to "Input Capture direct mode", select rising edge, no prescaler, and no filter. Enable the TIM4 capture/compare interrupt in NVIC.
+
+## Complete Project Code
+
+<InArticleAd />
+
+The following code goes into `main.c` inside the CubeIDE-generated project. The CubeMX initialization handles all peripheral setup. This code goes in the user sections that CubeMX preserves during regeneration.
+
+```c title="main.c"
+/* USER CODE BEGIN Includes */
+#include <stdio.h>
+#include <string.h>
+/* USER CODE END Includes */
+
+/* USER CODE BEGIN PV */
+/* Servo parameters */
+#define SERVO_MIN_PULSE   500    /* 0.5 ms = 0 degrees */
+#define SERVO_MAX_PULSE   2500   /* 2.5 ms = 180 degrees */
+#define SERVO_CENTER      1500   /* 1.5 ms = 90 degrees */
+
+/* Motor parameters */
+#define MOTOR_PWM_MAX     999    /* TIM3 ARR for motor */
+#define MOTOR_RAMP_STEP   10     /* Duty increment per ramp tick */
+#define MOTOR_RAMP_DELAY  20     /* ms between ramp steps */
+
+/* Buzzer note ARR values (timer clock = 1 MHz) */
+#define NOTE_C5           1912
+#define NOTE_E5           1517
+#define NOTE_G5           1275
+#define NOTE_SILENCE      0
+
+/* Button debounce */
+#define DEBOUNCE_MS       50
+
+/* State variables */
+static uint8_t motor_running = 0;
+static uint16_t motor_target_duty = 700;  /* 70% speed when on */
+static uint16_t motor_current_duty = 0;
+static uint32_t last_button_tick = 0;
+
+/* ADC results */
+static uint16_t adc_pan = 0;
+static uint16_t adc_tilt = 0;
+
+/* UART transmit buffer */
+static char uart_buf[128];
+/* USER CODE END PV */
+
+/* USER CODE BEGIN PFP */
+static uint16_t map_adc_to_pulse(uint16_t adc_val);
+static void read_potentiometers(void);
+static void update_servos(void);
+static void handle_button(void);
+static void ramp_motor(void);
+static void buzzer_beep(uint16_t note_arr, uint16_t duration_ms);
+static void uart_print(const char *msg);
+/* USER CODE END PFP */
+```
+
+```c title="main.c (continued: helper functions)"
+/* USER CODE BEGIN 0 */
+
+/* Map 12-bit ADC value (0 to 4095) to servo pulse width (500 to 2500 us) */
+static uint16_t map_adc_to_pulse(uint16_t adc_val)
+{
+    return SERVO_MIN_PULSE +
+           ((uint32_t)adc_val * (SERVO_MAX_PULSE - SERVO_MIN_PULSE)) / 4095;
+}
+
+/* Read both potentiometers using polling mode */
+static void read_potentiometers(void)
+{
+    HAL_ADC_Start(&hadc1);
+
+    /* Read pan potentiometer (rank 1, channel 2) */
+    if (HAL_ADC_PollForConversion(&hadc1, 10) == HAL_OK)
+    {
+        adc_pan = HAL_ADC_GetValue(&hadc1);
+    }
+
+    /* Read tilt potentiometer (rank 2, channel 3) */
+    if (HAL_ADC_PollForConversion(&hadc1, 10) == HAL_OK)
+    {
+        adc_tilt = HAL_ADC_GetValue(&hadc1);
+    }
+
+    HAL_ADC_Stop(&hadc1);
+}
+
+/* Update servo positions based on ADC readings */
+static void update_servos(void)
+{
+    uint16_t pan_pulse = map_adc_to_pulse(adc_pan);
+    uint16_t tilt_pulse = map_adc_to_pulse(adc_tilt);
+
+    /* Check for limit warning: beep if at 0 or 180 degrees */
+    static uint8_t prev_pan_limit = 0;
+    static uint8_t prev_tilt_limit = 0;
+
+    uint8_t pan_at_limit = (pan_pulse <= SERVO_MIN_PULSE + 20) ||
+                           (pan_pulse >= SERVO_MAX_PULSE - 20);
+    uint8_t tilt_at_limit = (tilt_pulse <= SERVO_MIN_PULSE + 20) ||
+                            (tilt_pulse >= SERVO_MAX_PULSE - 20);
+
+    /* Beep only on transition into limit zone */
+    if (pan_at_limit && !prev_pan_limit)
+    {
+        buzzer_beep(NOTE_E5, 100);
+    }
+    if (tilt_at_limit && !prev_tilt_limit)
+    {
+        buzzer_beep(NOTE_G5, 100);
+    }
+    prev_pan_limit = pan_at_limit;
+    prev_tilt_limit = tilt_at_limit;
+
+    /* Set servo pulse widths */
+    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pan_pulse);
+    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, tilt_pulse);
+}
+
+/* Handle button press with debounce */
+static void handle_button(void)
+{
+    uint32_t now = HAL_GetTick();
+    if ((now - last_button_tick) < DEBOUNCE_MS)
+        return;
+
+    if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_10) == GPIO_PIN_RESET)
+    {
+        last_button_tick = now;
+        motor_running = !motor_running;
+
+        if (!motor_running)
+        {
+            /* Set direction to coast */
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET);
+        }
+        else
+        {
+            /* Set direction: forward */
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET);
+        }
+
+        /* Short confirmation beep */
+        buzzer_beep(NOTE_C5, 50);
+    }
+}
+
+/* Gradually ramp motor speed toward target or zero */
+static void ramp_motor(void)
+{
+    uint16_t target = motor_running ? motor_target_duty : 0;
+
+    if (motor_current_duty < target)
+    {
+        motor_current_duty += MOTOR_RAMP_STEP;
+        if (motor_current_duty > target)
+            motor_current_duty = target;
+    }
+    else if (motor_current_duty > target)
+    {
+        if (motor_current_duty >= MOTOR_RAMP_STEP)
+            motor_current_duty -= MOTOR_RAMP_STEP;
+        else
+            motor_current_duty = 0;
+    }
+
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, motor_current_duty);
+}
+
+/* Play a tone on the buzzer for a given duration, then silence */
+static void buzzer_beep(uint16_t note_arr, uint16_t duration_ms)
+{
+    if (note_arr == NOTE_SILENCE)
+    {
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, 0);
+        return;
+    }
+
+    /* Save current motor ARR, change to buzzer frequency */
+    uint16_t saved_arr = __HAL_TIM_GET_AUTORELOAD(&htim3);
+
+    __HAL_TIM_SET_AUTORELOAD(&htim3, note_arr);
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, note_arr / 2);
+
+    /* Scale motor duty to new ARR so motor speed stays consistent */
+    uint16_t scaled_motor = (uint32_t)motor_current_duty * note_arr / saved_arr;
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, scaled_motor);
+
+    HAL_Delay(duration_ms);
+
+    /* Restore motor ARR and duty */
+    __HAL_TIM_SET_AUTORELOAD(&htim3, saved_arr);
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, motor_current_duty);
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, 0);
+}
+
+/* Print a string over UART */
+static void uart_print(const char *msg)
+{
+    HAL_UART_Transmit(&huart1, (uint8_t *)msg, strlen(msg), 100);
+}
+
+/* USER CODE END 0 */
+```
+
+```c title="main.c (continued: main loop)"
+/* USER CODE BEGIN 2 */
+
+/* Calibrate and start ADC */
+HAL_ADCEx_Calibration_Start(&hadc1);
+
+/* Start PWM on all channels */
+HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);  /* Pan servo */
+HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);  /* Tilt servo */
+HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);  /* Motor speed */
+HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);  /* Buzzer */
+
+/* Initial motor direction: forward (but duty = 0, so stopped) */
+HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET);
+
+/* Startup confirmation: two short beeps */
+buzzer_beep(NOTE_C5, 80);
+HAL_Delay(80);
+buzzer_beep(NOTE_E5, 80);
+
+uart_print("PWM Motor Control initialized\r\n");
+
+/* USER CODE END 2 */
+
+/* Infinite loop */
+/* USER CODE BEGIN WHILE */
+uint32_t last_ramp_tick = 0;
+uint32_t last_print_tick = 0;
+
+while (1)
+{
+    uint32_t now = HAL_GetTick();
+
+    /* Read potentiometers and update servos every 20 ms */
+    read_potentiometers();
+    update_servos();
+
+    /* Check button */
+    handle_button();
+
+    /* Ramp motor speed every MOTOR_RAMP_DELAY ms */
+    if ((now - last_ramp_tick) >= MOTOR_RAMP_DELAY)
+    {
+        last_ramp_tick = now;
+        ramp_motor();
+    }
+
+    /* Print status every 500 ms */
+    if ((now - last_print_tick) >= 500)
+    {
+        last_print_tick = now;
+
+        uint16_t pan_angle = ((uint32_t)adc_pan * 180) / 4095;
+        uint16_t tilt_angle = ((uint32_t)adc_tilt * 180) / 4095;
+
+        snprintf(uart_buf, sizeof(uart_buf),
+                 "Pan: %3u deg  Tilt: %3u deg  Motor: %s (%u%%)\r\n",
+                 pan_angle, tilt_angle,
+                 motor_running ? "ON" : "OFF",
+                 (motor_current_duty * 100) / MOTOR_PWM_MAX);
+        uart_print(uart_buf);
+    }
+
+    HAL_Delay(10);  /* ~50 Hz control loop */
+
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+}
+/* USER CODE END 3 */
+```
+
+## Input Capture Example
+
+To measure an external signal frequency using TIM4 input capture, add the following to your project. Configure TIM4_CH1 (PB6) as input capture in CubeMX and enable the TIM4 global interrupt.
+
+```c title="input_capture.c"
+/* USER CODE BEGIN PV */
+static volatile uint32_t ic_rising_1 = 0;
+static volatile uint32_t ic_rising_2 = 0;
+static volatile uint8_t  ic_captured = 0;
+static volatile uint32_t ic_frequency = 0;
+/* USER CODE END PV */
+
+/* Start input capture with interrupt */
+/* USER CODE BEGIN 2 */
+HAL_TIM_IC_Start_IT(&htim4, TIM_CHANNEL_1);
+/* USER CODE END 2 */
+
+/* Input capture callback */
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM4 && htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)
+    {
+        if (ic_captured == 0)
+        {
+            ic_rising_1 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
+            ic_captured = 1;
+        }
+        else
+        {
+            ic_rising_2 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
+
+            uint32_t period_ticks;
+            if (ic_rising_2 >= ic_rising_1)
+                period_ticks = ic_rising_2 - ic_rising_1;
+            else
+                period_ticks = (htim->Init.Period + 1) - ic_rising_1 + ic_rising_2;
+
+            if (period_ticks > 0)
+                ic_frequency = 1000000 / period_ticks;  /* 1 MHz timer clock */
+
+            ic_captured = 0;
+        }
+    }
+}
+```
+
+## CubeIDE Project Structure
+
+<FileTree>
+- pwm_motor_control/
+  - Core/
+    - Inc/
+      - main.h
+      - stm32f1xx_hal_conf.h
+      - stm32f1xx_it.h
+    - Src/
+      - main.c
+      - stm32f1xx_hal_msp.c
+      - stm32f1xx_it.c
+      - system_stm32f1xx.c
+  - Drivers/
+    - CMSIS/
+    - STM32F1xx_HAL_Driver/
+  - pwm_motor_control.ioc
+</FileTree>
+
+## Testing and Verification
+
+<Steps>
+1. **Flash and connect.** Build the project, flash via ST-Link, and open a serial terminal at 115200 baud. You should see the startup beeps and status messages appearing every 500 ms.
+
+2. **Test servos.** Rotate potentiometer 1 fully in each direction. The pan servo should sweep from 0 to 180 degrees. Repeat with potentiometer 2 for the tilt servo. When either pot reaches the end of travel, you should hear a short beep.
+
+3. **Test DC motor.** Press the button. The motor should ramp up smoothly to 70% speed over about 1.5 seconds. Press again; the motor ramps down to a stop. The direction pins PB0/PB1 can be swapped in code to reverse rotation.
+
+4. **Verify with a multimeter or oscilloscope.** Measure the PWM signal on PA0: you should see a 50 Hz waveform with the pulse width changing as you turn the pot. On PA6, verify the 1 kHz motor PWM and confirm the duty cycle matches the serial output percentage.
+
+5. **Test input capture.** If you have a signal generator or a second timer output, connect it to PB6 and read `ic_frequency` over the serial terminal to verify the measurement.
+</Steps>
+
+## Production Notes
+
+<InArticleAd />
+
+**Servo jitter.** The SG90 can exhibit visible jitter if the PWM signal has timing noise. Common causes: interrupt handlers that run too long during a PWM update, or electrical noise on the signal line. Solutions include using hardware dead-time insertion (available on TIM1), adding a 100 nF capacitor on the servo signal line close to the servo connector, and keeping servo wires away from motor power wires.
+
+**Motor EMI.** Brushed DC motors generate significant electrical noise when commutating. A 100 nF ceramic capacitor across the motor terminals reduces radiated emissions. For the L298N, add 100 nF ceramic capacitors on the power input as close to the driver IC as possible. If the STM32 resets when the motor starts, the power supply cannot handle the inrush current: add a bulk capacitor (100 to 470 uF electrolytic) on the motor power rail.
+
+**Power supply isolation.** In a production design, the MCU power domain should be isolated from the motor power domain. Use separate voltage regulators for logic (3.3V) and motor power (5 to 12V). Connect the grounds at a single point to avoid ground loops. The L298N module already provides some isolation through its onboard regulator, but for high-current motors you should add your own regulation.
+
+**Timer resource allocation.** The STM32F103C8T6 has four general-purpose timers (TIM2, TIM3, TIM4) and one advanced timer (TIM1). In this project, TIM2 handles servos and TIM3 handles the motor and buzzer. For a production version where motor and buzzer need independent frequencies, allocate them to separate timers. TIM4 is free for input capture or other uses.
+
+**Soft start for motors.** The ramp function in this project prevents inrush current spikes that could cause brown-outs. In production firmware, implement the ramp with a timer interrupt rather than polling in the main loop to ensure consistent acceleration regardless of other processing delays.
+
+<Copyright />
+<SensorActuatorInterfacingStm32Comments />
+<TawkWidget />

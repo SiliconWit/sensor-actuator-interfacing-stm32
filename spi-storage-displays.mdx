@@ -1,0 +1,635 @@
+---
+title: "SPI Protocol: Storage and Displays"
+description: "Interface an ST7735 color TFT display and microSD card on the same SPI bus. Build a portable data logger that displays real-time charts and writes CSV data to an SD card using FatFS on the STM32 Blue Pill"
+contributors: "sam-macharia,lawrence-langat"
+pubDate: 2026-03-05
+tags: ["stm32", "spi", "st7735", "tft", "sd-card", "fatfs", "data-logger", "cubemx"]
+excerpt: "Wire an ST7735 color TFT and a microSD card module to the same SPI bus. Configure chip select management, write a TFT driver with chart rendering, integrate FatFS for CSV logging, and build a complete portable data logger with live display and file statistics."
+heroImage: "https://cdn.siliconwit.com/education/sensor-actuator-interfacing-stm32/spi-storage-displays.png"
+---
+
+import TawkWidget from '../../../../components/TawkWidget.astro';
+import UniversalContentContributors from '../../../../components/UniversalContentContributors.astro';
+import InArticleAd from '../../../../components/InArticleAd.astro';
+import Copyright from '../../../../components/Copyright.astro';
+import TailwindWrapper from '../../../../components/TailwindWrapper.jsx';
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import { Card, CardGrid, Badge, Steps, LinkButton, FileTree } from '@astrojs/starlight/components';
+import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
+
+<UniversalContentContributors
+  contributors={frontmatter.contributors}
+/>
+
+SPI is the fastest bus you will use on the Blue Pill, and it is the protocol of choice for color displays and SD cards. In this lesson you will connect two SPI devices to the same bus, manage chip select lines in software, write a TFT display driver from initialization commands to chart rendering, and integrate ST's FatFS middleware for reliable file operations on an SD card. The result is a self-contained data logger that shows live readings on a color screen and saves everything to a CSV file. #STM32 #SPI #DataLogger
+
+## What We Are Building
+
+<Card title="Portable Data Logger with Color TFT Display" icon="star">
+A handheld data logger that reads an analog sensor (potentiometer simulating a sensor) through the ADC, plots a scrolling line chart on an ST7735 color TFT display, and writes timestamped CSV records to a microSD card. A push button toggles between the live chart view and a statistics screen showing sample count, minimum, maximum, and average values read back from the file. A status LED blinks during SD write operations.
+</Card>
+
+**Project specifications:**
+
+| Parameter | Value |
+|-----------|-------|
+| Board | Blue Pill (STM32F103C8T6) |
+| SPI peripheral | SPI1 (shared bus for TFT and SD card) |
+| SPI clock | 18 MHz for TFT, 4.5 MHz for SD card |
+| TFT display | ST7735 1.8" 128x160, RGB565 color |
+| SD card | microSD via SPI adapter module |
+| ADC input | PA0 (potentiometer, 12-bit) |
+| Sampling rate | 10 Hz (100 ms interval) |
+| File format | CSV (index, milliseconds, raw ADC, voltage) |
+
+### Bill of Materials
+
+| Component | Quantity | Notes |
+|-----------|----------|-------|
+| Blue Pill (STM32F103C8T6) | 1 | From previous lessons |
+| ST-Link V2 clone | 1 | From previous lessons |
+| ST7735 TFT display (1.8", SPI) | 1 | 8-pin module: VCC, GND, CS, RESET, DC, SDA, SCK, LED |
+| microSD card module | 1 | SPI interface with 3.3V regulator |
+| microSD card | 1 | Any capacity, formatted FAT32 |
+| Potentiometer (10K) | 1 | Simulates analog sensor input |
+| Push button | 1 | View toggle |
+| LED + 330 ohm resistor | 1 | SD write indicator |
+| Breadboard + jumper wires | 1 set | From previous lessons |
+
+## SPI Protocol Fundamentals
+
+<InArticleAd />
+
+SPI uses four signals for full-duplex communication. The master generates the clock and selects which slave to talk to:
+
+| Signal | Direction | Function |
+|--------|-----------|----------|
+| SCK | Master to slave | Serial clock |
+| MOSI | Master to slave | Master Out, Slave In (data to slave) |
+| MISO | Slave to master | Master In, Slave Out (data from master) |
+| CS | Master to slave | Chip Select (active low, one per device) |
+
+### Clock Polarity and Phase
+
+SPI has four operating modes defined by two parameters:
+
+| Mode | CPOL | CPHA | Clock Idle | Data Sampled |
+|------|------|------|------------|-------------|
+| 0 | 0 | 0 | Low | Rising edge |
+| 1 | 0 | 1 | Low | Falling edge |
+| 2 | 1 | 0 | High | Falling edge |
+| 3 | 1 | 1 | High | Rising edge |
+
+Both the ST7735 and SD cards use Mode 0 (CPOL=0, CPHA=0). When two devices share a bus but need different modes, you must reconfigure the SPI peripheral before switching. In our case both use Mode 0, so no reconfiguration is needed.
+
+### Multiple Devices on One Bus
+
+MOSI, MISO, and SCK are shared between all devices. Each device gets its own CS pin, controlled by software. The protocol is simple: pull one CS low to talk to that device, keep all others high. Never have two CS lines low at the same time.
+
+## Wiring
+
+| STM32 Pin | Function | ST7735 TFT | SD Card Module |
+|-----------|----------|-----------|----------------|
+| PA5 | SPI1_SCK | SCK | SCK |
+| PA7 | SPI1_MOSI | SDA (MOSI) | MOSI |
+| PA6 | SPI1_MISO | (not connected) | MISO |
+| PB0 | TFT_CS (GPIO) | CS | |
+| PB1 | TFT_DC (GPIO) | DC | |
+| PB10 | TFT_RST (GPIO) | RESET | |
+| PB12 | SD_CS (GPIO) | | CS |
+| PA0 | ADC1_IN0 | | |
+| PA1 | Button input | | |
+| PC13 | Status LED | | |
+| 3.3V | Power | VCC | VCC |
+| GND | Ground | GND | GND |
+
+The TFT backlight (LED pin) connects to 3.3V through a 100 ohm resistor, or directly to 3.3V if the module has an onboard resistor. Most modules do.
+
+:::caution[SD card module voltage]
+Some microSD modules are designed for 5V Arduino boards and have onboard regulators and level shifters. If yours has a 3.3V regulator, you can power it from 3.3V directly, but check that the level shifters do not attenuate the 3.3V SPI signals. Modules labeled "3.3V/5V compatible" work best with the Blue Pill.
+:::
+
+## CubeMX Configuration
+
+<Steps>
+1. **Create a new project** for STM32F103C8Tx in STM32CubeIDE. Set the debug interface to Serial Wire (SYS category).
+
+2. **Configure SPI1.** Mode: Full-Duplex Master. Parameter Settings: Prescaler = 4 (gives 18 MHz from 72 MHz APB2), Data Size = 8 Bits, First Bit = MSB, CPOL = Low, CPHA = 1 Edge, NSS = Software. The NSS software setting means we control chip select with GPIO.
+
+3. **Configure GPIO outputs.** Set PB0 (TFT_CS), PB1 (TFT_DC), PB10 (TFT_RST), PB12 (SD_CS) as GPIO_Output, push-pull, no pull-up, high speed. Set initial output level to High for all CS pins.
+
+4. **Configure ADC1.** Enable IN0 (PA0). Set resolution to 12-bit, right-aligned. Single conversion mode is fine; we trigger conversions manually.
+
+5. **Configure button input.** Set PA1 as GPIO_Input with internal pull-up enabled.
+
+6. **Configure LED.** Set PC13 as GPIO_Output (the onboard LED is active low on most Blue Pill boards).
+
+7. **Enable FatFS middleware.** In the Middleware category, enable FATFS and select "User-defined" as the SD interface. This generates the FatFS source files and the diskio.c template where you implement the low-level SPI read/write functions.
+
+8. **Generate code** and open main.c.
+</Steps>
+
+## ST7735 TFT Display Driver
+
+The ST7735 uses a command/data protocol layered on top of SPI. The DC (Data/Command) pin tells the display whether the byte being sent is a command or pixel data. DC low means command, DC high means data.
+
+### Pin Control Macros and SPI Helpers
+
+```c title="main.c"
+/* Private defines */
+#define TFT_CS_LOW()    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET)
+#define TFT_CS_HIGH()   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET)
+#define TFT_DC_CMD()    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET)
+#define TFT_DC_DATA()   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_SET)
+#define TFT_RST_LOW()   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_RESET)
+#define TFT_RST_HIGH()  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_SET)
+#define SD_CS_LOW()     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET)
+#define SD_CS_HIGH()    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET)
+#define LED_ON()        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET)
+#define LED_OFF()       HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET)
+
+#define TFT_WIDTH   128
+#define TFT_HEIGHT  160
+
+/* SPI transmit wrapper */
+static void spi_tx(uint8_t *data, uint16_t len) {
+    HAL_SPI_Transmit(&hspi1, data, len, HAL_MAX_DELAY);
+}
+
+static void tft_cmd(uint8_t cmd) {
+    TFT_DC_CMD();
+    TFT_CS_LOW();
+    spi_tx(&cmd, 1);
+    TFT_CS_HIGH();
+}
+
+static void tft_data(uint8_t *data, uint16_t len) {
+    TFT_DC_DATA();
+    TFT_CS_LOW();
+    spi_tx(data, len);
+    TFT_CS_HIGH();
+}
+
+static void tft_data8(uint8_t val) {
+    tft_data(&val, 1);
+}
+```
+
+### Initialization Sequence
+
+The ST7735 requires a specific startup sequence: hardware reset, software reset, exit sleep mode, set color format, then turn on the display.
+
+```c title="main.c"
+void tft_init(void) {
+    /* Hardware reset */
+    TFT_RST_LOW();
+    HAL_Delay(50);
+    TFT_RST_HIGH();
+    HAL_Delay(50);
+
+    tft_cmd(0x01);          /* Software reset */
+    HAL_Delay(150);
+    tft_cmd(0x11);          /* Sleep out */
+    HAL_Delay(150);
+
+    tft_cmd(0x3A);          /* COLMOD: pixel format */
+    tft_data8(0x05);        /* 16-bit RGB565 */
+
+    tft_cmd(0x36);          /* MADCTL: memory access control */
+    tft_data8(0x00);        /* Normal orientation: top-left origin */
+
+    tft_cmd(0xB1);          /* Frame rate control (normal mode) */
+    tft_data8(0x01);
+    tft_data8(0x2C);
+    tft_data8(0x2D);
+
+    tft_cmd(0x29);          /* Display ON */
+    HAL_Delay(100);
+}
+```
+
+### Drawing Functions
+
+The ST7735 uses a window-based drawing model. You set a rectangular region (column start/end, row start/end), then stream pixel data into that window. Colors use RGB565 format: 5 bits red, 6 bits green, 5 bits blue, packed into 16 bits.
+
+```c title="main.c"
+void tft_set_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
+    tft_cmd(0x2A); /* Column address set */
+    uint8_t col[] = {0x00, (uint8_t)x0, 0x00, (uint8_t)x1};
+    tft_data(col, 4);
+    tft_cmd(0x2B); /* Row address set */
+    uint8_t row[] = {0x00, (uint8_t)y0, 0x00, (uint8_t)y1};
+    tft_data(row, 4);
+    tft_cmd(0x2C); /* Memory write */
+}
+
+uint16_t tft_color(uint8_t r, uint8_t g, uint8_t b) {
+    return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+}
+
+void tft_draw_pixel(uint16_t x, uint16_t y, uint16_t color) {
+    tft_set_window(x, y, x, y);
+    uint8_t buf[2] = {color >> 8, color & 0xFF};
+    tft_data(buf, 2);
+}
+
+void tft_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color) {
+    tft_set_window(x, y, x + w - 1, y + h - 1);
+    uint8_t hi = color >> 8, lo = color & 0xFF;
+    TFT_DC_DATA();
+    TFT_CS_LOW();
+    for (uint32_t i = 0; i < (uint32_t)w * h; i++) { spi_tx(&hi, 1); spi_tx(&lo, 1); }
+    TFT_CS_HIGH();
+}
+
+void tft_fill_screen(uint16_t color) { tft_fill_rect(0, 0, TFT_WIDTH, TFT_HEIGHT, color); }
+```
+
+### Simple Text Rendering
+
+For a data logger, you need numbers on screen. A minimal 5x7 font stored as bitmaps handles digits, period, minus, and space. Each character is 5 columns of 7 pixels, stored as one byte per column (bit 0 = top row).
+
+```c title="main.c"
+static const uint8_t font5x7[][5] = {
+    {0x3E,0x51,0x49,0x45,0x3E}, /* 0 */ {0x00,0x42,0x7F,0x40,0x00}, /* 1 */
+    {0x42,0x61,0x51,0x49,0x46}, /* 2 */ {0x21,0x41,0x45,0x4B,0x31}, /* 3 */
+    {0x18,0x14,0x12,0x7F,0x10}, /* 4 */ {0x27,0x45,0x45,0x45,0x39}, /* 5 */
+    {0x3C,0x4A,0x49,0x49,0x30}, /* 6 */ {0x01,0x71,0x09,0x05,0x03}, /* 7 */
+    {0x36,0x49,0x49,0x49,0x36}, /* 8 */ {0x06,0x49,0x49,0x29,0x1E}, /* 9 */
+    {0x00,0x60,0x60,0x00,0x00}, /* . */  {0x08,0x08,0x08,0x08,0x08}, /* - */
+    {0x00,0x00,0x00,0x00,0x00}, /* space */
+};
+
+static int font_index(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c == '.') return 10;
+    if (c == '-') return 11;
+    return 12;
+}
+
+void tft_draw_char(uint16_t x, uint16_t y, char c, uint16_t color, uint16_t bg) {
+    int idx = font_index(c);
+    for (uint8_t col = 0; col < 5; col++) {
+        uint8_t line = font5x7[idx][col];
+        for (uint8_t row = 0; row < 7; row++)
+            tft_draw_pixel(x + col, y + row, (line & (1 << row)) ? color : bg);
+    }
+}
+
+void tft_draw_string(uint16_t x, uint16_t y, const char *str, uint16_t color, uint16_t bg) {
+    while (*str) { tft_draw_char(x, y, *str++, color, bg); x += 6; }
+}
+```
+
+### Drawing a Scrolling Line Chart
+
+The chart occupies the lower portion of the display. New values enter from the right and old values scroll left. The draw function connects adjacent points with a simple vertical interpolation to produce smooth lines.
+
+```c title="main.c"
+#define CHART_Y      40
+#define CHART_W      128
+#define CHART_H      100
+#define CHART_BOTTOM (CHART_Y + CHART_H - 1)
+
+static uint16_t chart_buf[128];
+static uint8_t chart_count = 0;
+
+void tft_draw_chart(uint16_t new_val) {
+    uint16_t scaled = (uint16_t)((uint32_t)new_val * (CHART_H - 1) / 4095);
+
+    /* Shift buffer left, append new value */
+    if (chart_count >= CHART_W) {
+        for (int i = 0; i < CHART_W - 1; i++) chart_buf[i] = chart_buf[i + 1];
+        chart_buf[CHART_W - 1] = scaled;
+    } else {
+        chart_buf[chart_count++] = scaled;
+    }
+
+    uint16_t bg = tft_color(0, 0, 0);
+    tft_fill_rect(0, CHART_Y, CHART_W, CHART_H, bg);
+
+    /* Dotted grid lines at 25%, 50%, 75% */
+    uint16_t grid = tft_color(40, 40, 40);
+    for (int g = 1; g <= 3; g++) {
+        uint16_t gy = CHART_BOTTOM - (CHART_H * g / 4);
+        for (int gx = 0; gx < CHART_W; gx += 4) tft_draw_pixel(gx, gy, grid);
+    }
+
+    /* Draw data line with vertical interpolation between points */
+    uint16_t green = tft_color(0, 255, 0);
+    uint8_t count = (chart_count < CHART_W) ? chart_count : CHART_W;
+    for (int i = 1; i < count; i++) {
+        int16_t y0 = CHART_BOTTOM - chart_buf[i - 1];
+        int16_t y1 = CHART_BOTTOM - chart_buf[i];
+        int16_t dy = y1 - y0;
+        int steps = (dy < 0) ? -dy : dy;
+        if (steps == 0) steps = 1;
+        for (int s = 0; s <= steps; s++)
+            tft_draw_pixel(i, y0 + (dy * s) / steps, green);
+    }
+}
+```
+
+## SD Card with FatFS
+
+<InArticleAd />
+
+The SD card communicates over SPI using a command/response protocol. In SPI mode, the SD card uses only CS, SCK, MOSI (DI), and MISO (DO). CubeMX generates the FatFS middleware, but you must implement the low-level disk I/O functions in `user_diskio.c` (or `diskio.c`, depending on your CubeMX version).
+
+### SPI Speed Switching
+
+SD cards require a slow clock (400 kHz or below) during initialization and can run faster afterward. We adjust the SPI prescaler dynamically:
+
+```c title="main.c"
+static void spi_set_slow(void) {
+    /* 72 MHz / 256 = 281 kHz */
+    hspi1.Instance->CR1 &= ~SPI_CR1_SPE;           /* Disable SPI */
+    hspi1.Instance->CR1 &= ~SPI_CR1_BR;             /* Clear prescaler */
+    hspi1.Instance->CR1 |= SPI_BAUDRATEPRESCALER_256;
+    hspi1.Instance->CR1 |= SPI_CR1_SPE;             /* Re-enable */
+}
+
+static void spi_set_fast(void) {
+    /* 72 MHz / 16 = 4.5 MHz (safe for most SD cards) */
+    hspi1.Instance->CR1 &= ~SPI_CR1_SPE;
+    hspi1.Instance->CR1 &= ~SPI_CR1_BR;
+    hspi1.Instance->CR1 |= SPI_BAUDRATEPRESCALER_16;
+    hspi1.Instance->CR1 |= SPI_CR1_SPE;
+}
+
+static void spi_set_display(void) {
+    /* 72 MHz / 4 = 18 MHz (fast for TFT) */
+    hspi1.Instance->CR1 &= ~SPI_CR1_SPE;
+    hspi1.Instance->CR1 &= ~SPI_CR1_BR;
+    hspi1.Instance->CR1 |= SPI_BAUDRATEPRESCALER_4;
+    hspi1.Instance->CR1 |= SPI_CR1_SPE;
+}
+```
+
+### Low-Level Disk I/O
+
+The FatFS middleware calls functions in `user_diskio.c` to talk to the SD card. The key function is `USER_initialize`, which sends the SD card through its SPI-mode initialization sequence: 80 clock pulses with CS high, CMD0 to enter SPI mode, CMD8 to check the voltage range, then ACMD41 in a loop until the card is ready. After initialization, CMD58 reads the OCR register to determine if the card is standard capacity or SDHC.
+
+```c title="user_diskio.c"
+static uint8_t spi_xfer(uint8_t data) {
+    uint8_t rx;
+    HAL_SPI_TransmitReceive(&hspi1, &data, &rx, 1, HAL_MAX_DELAY);
+    return rx;
+}
+
+static uint8_t sd_send_cmd(uint8_t cmd, uint32_t arg) {
+    SD_CS_HIGH(); spi_xfer(0xFF);   /* Deselect, dummy clock */
+    SD_CS_LOW();  spi_xfer(0xFF);   /* Select, dummy clock */
+    spi_xfer(cmd);
+    spi_xfer((uint8_t)(arg >> 24));
+    spi_xfer((uint8_t)(arg >> 16));
+    spi_xfer((uint8_t)(arg >> 8));
+    spi_xfer((uint8_t)(arg));
+    uint8_t crc = 0xFF;
+    if (cmd == 0x40) crc = 0x95;    /* CMD0 CRC */
+    if (cmd == 0x48) crc = 0x87;    /* CMD8 CRC */
+    spi_xfer(crc);
+    uint8_t res;
+    for (int i = 0; i < 8; i++) {
+        res = spi_xfer(0xFF);
+        if (!(res & 0x80)) break;
+    }
+    return res;
+}
+```
+
+The `USER_read` and `USER_write` functions follow the same pattern: select, send command (CMD17 for read, CMD24 for write), transfer the 512-byte data block, then deselect. CubeMX generates the function stubs; you fill in the SPI transfer calls.
+
+### FatFS File Operations
+
+With the disk I/O layer in place, FatFS provides a familiar file API:
+
+```c title="main.c"
+#include "fatfs.h"
+
+FATFS fs;
+FIL logfile;
+FRESULT fres;
+char line_buf[64];
+
+uint8_t sd_mount(void) {
+    spi_set_fast();
+    fres = f_mount(&fs, "", 1); /* 1 = mount now */
+    return (fres == FR_OK) ? 1 : 0;
+}
+
+uint8_t sd_open_log(void) {
+    fres = f_open(&logfile, "LOG.CSV", FA_WRITE | FA_CREATE_ALWAYS);
+    if (fres != FR_OK) return 0;
+    /* Write CSV header */
+    f_puts("Index,Time_ms,ADC_Raw,Voltage_V\n", &logfile);
+    f_sync(&logfile);
+    return 1;
+}
+
+void sd_write_sample(uint32_t index, uint32_t time_ms, uint16_t adc_val) {
+    LED_ON();
+    spi_set_fast();
+    float voltage = adc_val * 3.3f / 4095.0f;
+    int v_int = (int)voltage;
+    int v_frac = (int)((voltage - v_int) * 100);
+    snprintf(line_buf, sizeof(line_buf), "%lu,%lu,%u,%d.%02d\n",
+             index, time_ms, adc_val, v_int, v_frac);
+    UINT bw;
+    f_write(&logfile, line_buf, strlen(line_buf), &bw);
+    f_sync(&logfile); /* Flush to card after each write */
+    LED_OFF();
+}
+
+void sd_close_log(void) {
+    f_close(&logfile);
+}
+```
+
+### Reading File Statistics
+
+When the user presses the button to view statistics, the firmware reopens the CSV file, scans all records, and computes min, max, average, and sample count. The function opens the file read-only, skips the header line, then parses the ADC_Raw field from each row:
+
+```c title="main.c"
+typedef struct {
+    uint32_t count;
+    uint16_t min_val;
+    uint16_t max_val;
+    float    avg_val;
+} log_stats_t;
+
+log_stats_t sd_read_stats(void) {
+    log_stats_t stats = {0, 4095, 0, 0.0f};
+    FIL rf;
+    spi_set_fast();
+    if (f_open(&rf, "LOG.CSV", FA_READ) != FR_OK) return stats;
+
+    char buf[80];
+    f_gets(buf, sizeof(buf), &rf); /* Skip header */
+    uint32_t sum = 0;
+    while (f_gets(buf, sizeof(buf), &rf)) {
+        /* Skip to third field (ADC_Raw): Index,Time_ms,ADC_Raw,Voltage */
+        char *p = buf;
+        for (int f = 0; f < 2 && p; f++) { p = strchr(p, ','); if (p) p++; }
+        if (!p) continue;
+        uint16_t val = (uint16_t)atoi(p);
+        if (val < stats.min_val) stats.min_val = val;
+        if (val > stats.max_val) stats.max_val = val;
+        sum += val; stats.count++;
+    }
+    f_close(&rf);
+    if (stats.count > 0) stats.avg_val = (float)sum / stats.count;
+    return stats;
+}
+```
+
+## Complete Main Loop
+
+<InArticleAd />
+
+The main loop ties everything together: sample ADC, update display, log to SD, and handle the button press for view switching.
+
+```c title="main.c"
+/* Private variables */
+uint8_t view_mode = 0;    /* 0 = live chart, 1 = statistics */
+uint8_t btn_prev = 1;
+uint32_t sample_index = 0;
+uint32_t last_sample_tick = 0;
+uint8_t sd_ready = 0;
+
+static void fmt_voltage(char *buf, size_t sz, uint16_t adc) {
+    float v = adc * 3.3f / 4095.0f;
+    snprintf(buf, sz, "%d.%02dV", (int)v, (int)((v - (int)v) * 100));
+}
+
+void show_live_view(uint16_t adc_val) {
+    uint16_t black = tft_color(0, 0, 0);
+    char val_str[16];
+    fmt_voltage(val_str, sizeof(val_str), adc_val);
+    tft_fill_rect(0, 0, TFT_WIDTH, 35, black);
+    tft_draw_string(4, 4, "SENSOR LOG", tft_color(0, 200, 255), black);
+    tft_draw_string(4, 18, val_str, tft_color(255, 255, 255), black);
+    spi_set_display();
+    tft_draw_chart(adc_val);
+}
+
+void show_stats_view(void) {
+    uint16_t white = tft_color(255, 255, 255);
+    uint16_t black = tft_color(0, 0, 0);
+    log_stats_t stats = sd_read_stats();
+    tft_fill_screen(black);
+    spi_set_display();
+    tft_draw_string(4, 4, "FILE STATS", tft_color(255, 255, 0), black);
+
+    char buf[20];
+    snprintf(buf, sizeof(buf), "N: %lu", stats.count);
+    tft_draw_string(4, 25, buf, white, black);
+    fmt_voltage(buf, sizeof(buf), stats.min_val);
+    tft_draw_string(4, 45, "MIN:", white, black);
+    tft_draw_string(34, 45, buf, white, black);
+    fmt_voltage(buf, sizeof(buf), stats.max_val);
+    tft_draw_string(4, 65, "MAX:", white, black);
+    tft_draw_string(34, 65, buf, white, black);
+    fmt_voltage(buf, sizeof(buf), (uint16_t)stats.avg_val);
+    tft_draw_string(4, 85, "AVG:", white, black);
+    tft_draw_string(34, 85, buf, white, black);
+}
+
+int main(void) {
+    HAL_Init();
+    SystemClock_Config();
+    MX_GPIO_Init();
+    MX_SPI1_Init();
+    MX_ADC1_Init();
+    MX_FATFS_Init();
+
+    spi_set_display();
+    tft_init();
+    tft_fill_screen(tft_color(0, 0, 0));
+
+    sd_ready = sd_mount();
+    if (sd_ready) sd_ready = sd_open_log();
+    spi_set_display();
+    if (!sd_ready)
+        tft_draw_string(4, 70, "SD ERROR", tft_color(255, 0, 0), tft_color(0, 0, 0));
+
+    while (1) {
+        uint32_t now = HAL_GetTick();
+
+        /* Button debounce and view toggle */
+        uint8_t btn = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1);
+        if (btn == 0 && btn_prev == 1) {
+            HAL_Delay(20);
+            if (!HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1)) {
+                view_mode = !view_mode;
+                if (view_mode) show_stats_view();
+            }
+        }
+        btn_prev = btn;
+
+        /* Sample at 10 Hz */
+        if (now - last_sample_tick >= 100) {
+            last_sample_tick = now;
+            HAL_ADC_Start(&hadc1);
+            HAL_ADC_PollForConversion(&hadc1, 10);
+            uint16_t adc_val = HAL_ADC_GetValue(&hadc1);
+            HAL_ADC_Stop(&hadc1);
+
+            if (sd_ready) { sd_write_sample(sample_index++, now, adc_val); }
+            if (!view_mode) { spi_set_display(); show_live_view(adc_val); }
+        }
+    }
+}
+```
+
+## Project File Structure
+
+<FileTree>
+- DataLogger_SPI/
+  - Core/
+    - Inc/
+      - main.h
+      - fatfs.h
+    - Src/
+      - main.c
+      - user_diskio.c
+  - FATFS/
+    - Target/
+      - user_diskio.c
+    - App/
+      - fatfs.c
+  - Drivers/
+    - STM32F1xx_HAL_Driver/
+    - CMSIS/
+  - DataLogger_SPI.ioc
+</FileTree>
+
+## Testing and Verification
+
+<Steps>
+1. **Test the TFT display first.** Comment out all SD card code. Flash the firmware and verify that the display initializes and shows the "SENSOR LOG" label with a voltage reading. Turn the potentiometer and confirm the chart scrolls.
+
+2. **Test the SD card separately.** Comment out the TFT code. Mount the SD card, write a test file with `f_puts`, then remove the card and check the file on a PC. If mounting fails, check wiring (especially MISO), verify the card is formatted FAT32, and confirm the SPI prescaler is set to 256 during initialization.
+
+3. **Combine both devices.** Enable all code. The key thing to verify is that chip select management works: the TFT does not glitch when the SD card is being accessed, and vice versa. Watch the status LED to confirm SD writes are happening.
+
+4. **Test view switching.** Press the button to toggle to the statistics view. Confirm the sample count, min, max, and average values are reasonable. Switch back to live view and verify the chart resumes.
+</Steps>
+
+## Production Notes
+
+:::tip[SPI speed limits]
+The ST7735 datasheet allows up to 15.15 MHz write clock, but most 1.8" modules work fine at 18 MHz. The SD card is more conservative: many cards fail above 10 MHz in SPI mode. The 4.5 MHz we use here is safe for all cards. In production, test your specific card brand at higher speeds and fall back if errors occur.
+:::
+
+**Level shifting.** If your SD card module has a 5V level shifter (common on Arduino-targeted modules), the 3.3V signals from the Blue Pill may not reach the logic high threshold. Either use a 3.3V native module or bypass the level shifter.
+
+**Wear leveling.** SD cards have internal wear leveling, but writing to the same file every 100 ms will eventually wear out the card. For long-term deployments, buffer multiple samples in RAM and write in larger blocks less frequently. Writing 512 bytes (one sector) at a time is most efficient.
+
+**Power consumption.** The SD card draws 50 to 100 mA during writes. The TFT backlight draws another 20 to 40 mA. Make sure your 3.3V regulator can handle the combined load. The Blue Pill's onboard regulator is rated for about 300 mA, which is adequate.
+
+**Decoupling.** Add a 100 uF electrolytic capacitor across the SD card module power pins. SD cards create current spikes during sector writes that can momentarily drop the supply voltage and cause SPI errors.
+
+<Copyright />
+<SensorActuatorInterfacingStm32Comments />
+<TawkWidget />

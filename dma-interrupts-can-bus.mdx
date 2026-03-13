@@ -1,0 +1,821 @@
+---
+title: "DMA, Interrupts, and CAN Bus"
+description: "Use DMA for zero-copy ADC streaming and SPI transfers, configure interrupt priorities, and build a two-node CAN bus sensor network using the STM32F103 built-in bxCAN peripheral with MCP2551 transceivers"
+contributors: "sam-macharia,lawrence-langat"
+pubDate: 2026-03-09
+tags: ["stm32", "dma", "can-bus", "interrupts", "bxcan", "mcp2551", "nvic", "sensor-network"]
+excerpt: "Build a two-node CAN bus sensor network with DMA-driven ADC sampling, hardware message filtering, and error recovery. Learn DMA controller architecture, NVIC priority configuration, CAN bus differential signaling, and the STM32 bxCAN peripheral."
+heroImage: "https://cdn.siliconwit.com/education/sensor-actuator-interfacing-stm32/dma-interrupts-can-bus.png"
+---
+
+import TawkWidget from '../../../../components/TawkWidget.astro';
+import UniversalContentContributors from '../../../../components/UniversalContentContributors.astro';
+import InArticleAd from '../../../../components/InArticleAd.astro';
+import Copyright from '../../../../components/Copyright.astro';
+import TailwindWrapper from '../../../../components/TailwindWrapper.jsx';
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import { Card, CardGrid, Badge, Steps, LinkButton, FileTree } from '@astrojs/starlight/components';
+import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
+
+<UniversalContentContributors
+  contributors={frontmatter.contributors}
+/>
+
+Previous lessons accessed peripherals through polling loops or simple interrupts. That approach works for a single sensor, but it falls apart when you need continuous ADC sampling while pushing frames to a display and exchanging messages across a vehicle bus. This lesson introduces DMA for hands-free data movement, proper interrupt architecture for real-time responsiveness, and CAN bus for reliable multi-node communication. The project connects two STM32 Blue Pills over a CAN bus: one reads a potentiometer via DMA and transmits the value, the other receives it and drives an LED. #STM32 #CAN #DMA
+
+## What We Are Building
+
+<Card title="CAN Bus Sensor Network (Two Nodes)" icon="star">
+Node A continuously samples a potentiometer through DMA-driven ADC and transmits the 12-bit value over CAN bus every 100 ms. It also sends a heartbeat frame every second. Node B receives the sensor data using hardware message filtering, prints it over UART, drives an LED with PWM proportional to the received value, and can send a command frame back to toggle Node A's onboard LED. Both nodes handle CAN errors and recover from bus-off state automatically.
+</Card>
+
+**Project specifications:**
+
+| Parameter | Value |
+|-----------|-------|
+| Boards | 2x Blue Pill (STM32F103C8T6) |
+| CAN baud rate | 500 kbps |
+| CAN TX pin | PA12 (CAN_TX) |
+| CAN RX pin | PA11 (CAN_RX) |
+| Transceiver | MCP2551 (one per node) |
+| Bus termination | 120 ohm resistor at each end |
+| Node A ADC | PA0 (ADC1 Channel 0, potentiometer) |
+| Node A onboard LED | PC13 (active low) |
+| Node B UART | PA2/PA3 (USART2 TX/RX) |
+| Node B PWM LED | PA8 (TIM1 CH1) |
+| Node B button | PB0 (send toggle command) |
+
+### Message ID Scheme
+
+| Message ID | Direction | Content |
+|------------|-----------|---------|
+| 0x001 | Node A to bus | Heartbeat (1 byte uptime counter) |
+| 0x100 | Node A to bus | Sensor data (2 bytes, 12-bit ADC value) |
+| 0x200 | Node B to Node A | Command (1 byte: 0x01 = toggle LED) |
+| 0x300 | Node A to bus | Status (1 byte: alarm flags) |
+
+## Parts Needed
+
+| Part | Quantity | Notes |
+|------|----------|-------|
+| Blue Pill (STM32F103C8T6) | 2 | One per CAN node |
+| MCP2551 CAN transceiver module | 2 | 5V powered, one per node |
+| 120 ohm resistor | 2 | Bus termination at each end |
+| 10K potentiometer | 1 | Analog input for Node A |
+| LED (any color) | 1 | PWM output on Node B |
+| 330 ohm resistor | 1 | Current limiting for LED |
+| Push button | 1 | Command trigger on Node B |
+| Breadboards | 2 | One per node |
+| Jumper wires | 20+ | Assorted |
+
+:::caution[CAN and USB share pins]
+On the STM32F103C8T6, the CAN peripheral and USB share PA11 and PA12. When CAN is enabled, USB is unavailable. Use UART (USART2 on PA2/PA3 or USART1 on PA9/PA10) for serial output instead of the USB port.
+:::
+
+## DMA Controller Architecture
+
+<InArticleAd />
+
+The STM32F103 has one DMA controller (DMA1) with 7 channels. Each channel is hardwired to specific peripheral requests. DMA moves data between memory and peripherals (or memory to memory) without CPU intervention. The CPU sets up source, destination, and transfer count, then the DMA controller handles every byte.
+
+### DMA Transfer Modes
+
+| Mode | Source | Destination | Use Case |
+|------|--------|-------------|----------|
+| Peripheral to memory | Peripheral data register | SRAM buffer | ADC readings, UART RX, SPI RX |
+| Memory to peripheral | SRAM buffer | Peripheral data register | UART TX, SPI TX, DAC output |
+| Memory to memory | SRAM address | SRAM address | Buffer copy, frame buffer operations |
+
+### Channel Assignments (DMA1)
+
+| Channel | Peripheral Request |
+|---------|-------------------|
+| Channel 1 | ADC1 |
+| Channel 2 | SPI1_RX, USART3_TX, TIM1_CH1 |
+| Channel 3 | SPI1_TX, USART3_RX, TIM1_CH2 |
+| Channel 4 | SPI2_RX, USART1_TX, TIM1_CH4 |
+| Channel 5 | SPI2_TX, USART1_RX, TIM1_UP |
+| Channel 6 | USART2_RX, TIM1_CH3 |
+| Channel 7 | USART2_TX |
+
+### Circular Mode vs Normal Mode
+
+In **normal mode**, DMA transfers the configured number of items and stops. You must reconfigure the channel to start another transfer. This suits one-shot operations like sending a fixed-length UART message.
+
+In **circular mode**, DMA wraps back to the start of the buffer when it reaches the end and continues transferring indefinitely. This is ideal for continuous ADC sampling: the DMA keeps filling a buffer in a loop while the CPU reads completed values at its own pace.
+
+### Double Buffering with Half-Transfer Interrupts
+
+DMA generates two interrupts during circular operation:
+
+- **Half-transfer complete (HT):** the first half of the buffer is filled
+- **Transfer complete (TC):** the second half is filled (and DMA wraps to start)
+
+The CPU processes the first half while DMA fills the second half, and vice versa. This gives you uninterrupted streaming with no data loss.
+
+## Interrupt Architecture on Cortex-M3
+
+The Nested Vectored Interrupt Controller (NVIC) on the STM32F103 uses 4 bits of priority, split between preemption priority and sub-priority based on the priority grouping setting.
+
+### Priority Rules
+
+| Group Setting | Preemption Bits | Sub-priority Bits | Preemption Levels |
+|---------------|----------------|-------------------|-------------------|
+| Group 4 (default) | 4 | 0 | 16 levels, no sub-priority |
+| Group 3 | 3 | 1 | 8 levels, 2 sub-priorities |
+| Group 2 | 2 | 2 | 4 levels, 4 sub-priorities |
+
+A lower numeric value means higher urgency. An interrupt with preemption priority 1 can preempt a handler running at priority 2. Sub-priority only breaks ties when two interrupts pend simultaneously.
+
+### Common ISR Pitfalls
+
+<Card title="Interrupt Safety Checklist" icon="warning">
+1. **Never call printf or HAL_Delay inside an ISR.** Both rely on SysTick and can deadlock.
+2. **Keep ISRs short.** Set a flag, copy data to a buffer, then return. Do processing in the main loop.
+3. **Mark shared variables volatile.** The compiler can optimize away reads to variables modified in an ISR if they are not declared volatile.
+4. **Disable interrupts around multi-byte shared data.** Reading a 32-bit value that an ISR modifies requires a critical section or atomic access.
+</Card>
+
+### Ring Buffer for Interrupt-Safe UART RX
+
+```c title="ring_buffer.h"
+#ifndef RING_BUFFER_H
+#define RING_BUFFER_H
+
+#include <stdint.h>
+
+#define RING_BUF_SIZE 256
+
+typedef struct {
+    uint8_t buffer[RING_BUF_SIZE];
+    volatile uint16_t head;
+    volatile uint16_t tail;
+} RingBuffer;
+
+static inline void ring_buf_init(RingBuffer *rb) {
+    rb->head = 0;
+    rb->tail = 0;
+}
+
+static inline uint8_t ring_buf_put(RingBuffer *rb, uint8_t byte) {
+    uint16_t next = (rb->head + 1) % RING_BUF_SIZE;
+    if (next == rb->tail) return 0; /* full */
+    rb->buffer[rb->head] = byte;
+    rb->head = next;
+    return 1;
+}
+
+static inline uint8_t ring_buf_get(RingBuffer *rb, uint8_t *byte) {
+    if (rb->head == rb->tail) return 0; /* empty */
+    *byte = rb->buffer[rb->tail];
+    rb->tail = (rb->tail + 1) % RING_BUF_SIZE;
+    return 1;
+}
+
+#endif
+```
+
+## CAN Bus Fundamentals
+
+<InArticleAd />
+
+CAN (Controller Area Network) is a multi-master, differential serial bus designed for noisy environments. It uses two wires (CANH and CANL) with differential signaling, making it resistant to electromagnetic interference. The bus requires 120 ohm termination resistors at each physical end.
+
+### Bus Electrical Levels
+
+| State | CANH | CANL | Differential |
+|-------|------|------|-------------|
+| Recessive (logic 1) | 2.5 V | 2.5 V | 0 V |
+| Dominant (logic 0) | 3.5 V | 1.5 V | 2 V |
+
+Dominant always wins over recessive. This property enables non-destructive bus arbitration: multiple nodes can start transmitting simultaneously, and the one with the lowest (highest-priority) message ID wins without any data corruption.
+
+### Standard CAN Frame Format
+
+| Field | Bits | Description |
+|-------|------|-------------|
+| SOF | 1 | Start of frame (dominant) |
+| Identifier | 11 | Message ID (lower value = higher priority) |
+| RTR | 1 | Remote transmission request |
+| IDE | 1 | Identifier extension (0 for standard) |
+| DLC | 4 | Data length code (0 to 8 bytes) |
+| Data | 0 to 64 | Payload (up to 8 bytes in classic CAN) |
+| CRC | 15 | Cyclic redundancy check |
+| ACK | 2 | Acknowledge slot + delimiter |
+| EOF | 7 | End of frame (recessive) |
+
+### Baud Rate Calculation
+
+CAN bit timing divides each bit into time quanta (tq). For the STM32F103, CAN runs on APB1 (36 MHz max). To achieve 500 kbps:
+
+- Bit time = 1 / 500000 = 2 us
+- Time quanta per bit = SYNC_SEG(1) + BS1 + BS2
+- With prescaler = 4: tq = 4 / 36 MHz = 111.1 ns
+- Total tq per bit = 2 us / 111.1 ns = 18 tq
+- BS1 = 13 tq, BS2 = 4 tq, SYNC = 1 tq (total = 18)
+- Sample point at (1 + 13) / 18 = 77.8% (within recommended 75% to 80%)
+- SJW = 1 tq (resynchronization jump width)
+
+## Wiring: Two-Node CAN Network
+
+### Node A Wiring (Sensor Node)
+
+| Blue Pill Pin | Connects To | Function |
+|---------------|-------------|----------|
+| PA0 | Potentiometer wiper | ADC1 Channel 0 input |
+| PA12 | MCP2551 TXD | CAN TX |
+| PA11 | MCP2551 RXD | CAN RX |
+| PC13 | Onboard LED | Toggled by remote command |
+| 3.3V | Pot VCC, pull-ups | Power |
+| GND | Pot GND, MCP2551 GND | Ground |
+| 5V | MCP2551 VCC | Transceiver power (5V required) |
+
+### Node B Wiring (Display Node)
+
+| Blue Pill Pin | Connects To | Function |
+|---------------|-------------|----------|
+| PA12 | MCP2551 TXD | CAN TX |
+| PA11 | MCP2551 RXD | CAN RX |
+| PA8 | LED (through 330 ohm) | PWM output (TIM1 CH1) |
+| PA2 | USB-Serial RX | USART2 TX (debug output) |
+| PA3 | USB-Serial TX | USART2 RX |
+| PB0 | Push button to GND | Command trigger (pull-up enabled) |
+| 5V | MCP2551 VCC | Transceiver power |
+| GND | MCP2551 GND, LED GND, button GND | Ground |
+
+### MCP2551 Transceiver Wiring (Same for Both Nodes)
+
+| MCP2551 Pin | Connects To |
+|-------------|-------------|
+| TXD | STM32 PA12 (CAN_TX) |
+| RXD | STM32 PA11 (CAN_RX) |
+| VCC | 5V |
+| GND | GND |
+| CANH | CAN bus CANH wire |
+| CANL | CAN bus CANL wire |
+| Rs | GND (high-speed mode) or 10K to GND (slope control) |
+
+Place a **120 ohm resistor between CANH and CANL** at each node (both ends of the bus).
+
+### Bus Topology
+
+```
+[Node A]                                           [Node B]
+STM32 PA12 --> MCP2551 TXD    CANH ---///--- CANH    MCP2551 TXD <-- STM32 PA12
+STM32 PA11 <-- MCP2551 RXD    CANL ---///--- CANL    MCP2551 RXD --> STM32 PA11
+                  |  120R  |                            |  120R  |
+                  CANH--CANL                            CANH--CANL
+```
+
+## CubeMX Configuration
+
+<InArticleAd />
+
+### Node A Configuration
+
+<Steps>
+1. **Create new project** for STM32F103C8T6 in STM32CubeIDE.
+
+2. **Enable CAN:** Under Connectivity, enable CAN. Set Prescaler = 4, Time Quanta in Bit Segment 1 = 13, Time Quanta in Bit Segment 2 = 4, ReSynchronization Jump Width = 1. This gives 500 kbps at 36 MHz APB1.
+
+3. **Enable ADC1:** Under Analog, enable ADC1 Channel 0 (PA0). Set Continuous Conversion Mode = Enabled, DMA Continuous Requests = Enabled.
+
+4. **Enable DMA for ADC1:** In the DMA Settings tab of ADC1, add DMA1 Channel 1. Set Mode = Circular, Data Width = Half Word (16-bit).
+
+5. **Configure TIM3:** Under Timers, enable TIM3 with a 100 ms period. Prescaler = 7199 (36 MHz / 7200 = 5 kHz), Counter Period = 499 (5000 / 500 = 10 Hz, i.e. 100 ms). Enable the update interrupt.
+
+6. **Configure PC13:** Set as GPIO Output (onboard LED).
+
+7. **Set NVIC priorities:** CAN RX0 interrupt = priority 1, DMA1 Channel 1 = priority 2, TIM3 = priority 3.
+
+8. **Generate code** and open main.c.
+</Steps>
+
+### Node B Configuration
+
+<Steps>
+1. **Create new project** for STM32F103C8T6.
+
+2. **Enable CAN:** Same baud rate settings as Node A (Prescaler = 4, BS1 = 13, BS2 = 4, SJW = 1).
+
+3. **Enable USART2:** Under Connectivity, enable USART2 in Asynchronous mode. Baud rate = 115200. TX = PA2, RX = PA3.
+
+4. **Enable TIM1 CH1 PWM:** Under Timers, enable TIM1 Channel 1 as PWM Generation. Prescaler = 71 (72 MHz / 72 = 1 MHz), Counter Period = 999 (1 kHz PWM).
+
+5. **Configure PB0:** Set as GPIO Input with internal pull-up.
+
+6. **Set NVIC priorities:** CAN RX0 interrupt = priority 1, USART2 = priority 3.
+
+7. **Generate code.**
+</Steps>
+
+## Node A: Sensor Node Code
+
+### CAN Initialization and Filter Setup
+
+```c title="can_config.c (Node A)"
+/* CAN filter configuration - accept all messages for Node A */
+void CAN_FilterConfig(void)
+{
+    CAN_FilterTypeDef filter;
+    filter.FilterBank = 0;
+    filter.FilterMode = CAN_FILTERMODE_IDMASK;
+    filter.FilterScale = CAN_FILTERSCALE_32BIT;
+    filter.FilterIdHigh = 0x0000;
+    filter.FilterIdLow = 0x0000;
+    filter.FilterMaskIdHigh = 0x0000;
+    filter.FilterMaskIdLow = 0x0000;
+    filter.FilterFIFOAssignment = CAN_RX_FIFO0;
+    filter.FilterActivation = ENABLE;
+    filter.SlaveStartFilterBank = 14;
+
+    HAL_CAN_ConfigFilter(&hcan, &filter);
+}
+```
+
+### DMA ADC Setup
+
+```c title="adc_dma.c (Node A)"
+/* Global variables */
+volatile uint16_t adc_dma_buffer[4];  /* DMA fills this continuously */
+volatile uint32_t adc_averaged = 0;
+volatile uint8_t heartbeat_counter = 0;
+volatile uint8_t led_toggle_request = 0;
+
+/* Start DMA-based ADC in circular mode */
+void ADC_DMA_Start(void)
+{
+    HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_dma_buffer, 4);
+}
+
+/* DMA transfer complete callback - average 4 samples */
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
+{
+    uint32_t sum = 0;
+    for (int i = 0; i < 4; i++) {
+        sum += adc_dma_buffer[i];
+    }
+    adc_averaged = sum / 4;
+}
+```
+
+### CAN Transmit Functions
+
+```c title="can_tx.c (Node A)"
+/* Send sensor data frame (ID 0x100) */
+HAL_StatusTypeDef CAN_SendSensorData(uint16_t adc_value)
+{
+    CAN_TxHeaderTypeDef tx_header;
+    uint8_t tx_data[2];
+    uint32_t tx_mailbox;
+
+    tx_header.StdId = 0x100;
+    tx_header.ExtId = 0;
+    tx_header.RTR = CAN_RTR_DATA;
+    tx_header.IDE = CAN_ID_STD;
+    tx_header.DLC = 2;
+    tx_header.TransmitGlobalTime = DISABLE;
+
+    tx_data[0] = (adc_value >> 8) & 0xFF;  /* High byte */
+    tx_data[1] = adc_value & 0xFF;          /* Low byte */
+
+    return HAL_CAN_AddTxMessage(&hcan, &tx_header, tx_data, &tx_mailbox);
+}
+
+/* Send heartbeat frame (ID 0x001) */
+HAL_StatusTypeDef CAN_SendHeartbeat(uint8_t counter)
+{
+    CAN_TxHeaderTypeDef tx_header;
+    uint8_t tx_data[1];
+    uint32_t tx_mailbox;
+
+    tx_header.StdId = 0x001;
+    tx_header.ExtId = 0;
+    tx_header.RTR = CAN_RTR_DATA;
+    tx_header.IDE = CAN_ID_STD;
+    tx_header.DLC = 1;
+    tx_header.TransmitGlobalTime = DISABLE;
+
+    tx_data[0] = counter;
+
+    return HAL_CAN_AddTxMessage(&hcan, &tx_header, tx_data, &tx_mailbox);
+}
+
+/* Send status frame (ID 0x300) */
+HAL_StatusTypeDef CAN_SendStatus(uint8_t flags)
+{
+    CAN_TxHeaderTypeDef tx_header;
+    uint8_t tx_data[1];
+    uint32_t tx_mailbox;
+
+    tx_header.StdId = 0x300;
+    tx_header.ExtId = 0;
+    tx_header.RTR = CAN_RTR_DATA;
+    tx_header.IDE = CAN_ID_STD;
+    tx_header.DLC = 1;
+    tx_header.TransmitGlobalTime = DISABLE;
+
+    tx_data[0] = flags;
+
+    return HAL_CAN_AddTxMessage(&hcan, &tx_header, tx_data, &tx_mailbox);
+}
+```
+
+### CAN Receive Callback (Node A)
+
+```c title="can_rx.c (Node A)"
+/* Handle received CAN frames on Node A */
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan_ptr)
+{
+    CAN_RxHeaderTypeDef rx_header;
+    uint8_t rx_data[8];
+
+    HAL_CAN_GetRxMessage(hcan_ptr, CAN_RX_FIFO0, &rx_header, rx_data);
+
+    /* Command from Node B: toggle LED */
+    if (rx_header.StdId == 0x200 && rx_header.DLC >= 1) {
+        if (rx_data[0] == 0x01) {
+            led_toggle_request = 1;
+        }
+    }
+}
+```
+
+### Timer Callback for Periodic Transmission
+
+```c title="timer_callback.c (Node A)"
+static uint32_t heartbeat_tick = 0;
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM3) {
+        /* Send sensor data every 100 ms (timer period) */
+        CAN_SendSensorData((uint16_t)adc_averaged);
+
+        /* Send heartbeat every 1 second (every 10th timer tick) */
+        heartbeat_tick++;
+        if (heartbeat_tick >= 10) {
+            heartbeat_tick = 0;
+            heartbeat_counter++;
+            CAN_SendHeartbeat(heartbeat_counter);
+        }
+    }
+}
+```
+
+### Node A main() Function
+
+```c title="main.c (Node A)"
+int main(void)
+{
+    HAL_Init();
+    SystemClock_Config();
+    MX_GPIO_Init();
+    MX_DMA_Init();
+    MX_ADC1_Init();
+    MX_CAN_Init();
+    MX_TIM3_Init();
+
+    /* Configure CAN filter */
+    CAN_FilterConfig();
+
+    /* Start CAN peripheral */
+    HAL_CAN_Start(&hcan);
+    HAL_CAN_ActivateNotification(&hcan,
+        CAN_IT_RX_FIFO0_MSG_PENDING |
+        CAN_IT_ERROR_WARNING |
+        CAN_IT_ERROR_PASSIVE |
+        CAN_IT_BUSOFF |
+        CAN_IT_LAST_ERROR_CODE);
+
+    /* Start DMA-based ADC (circular mode) */
+    ADC_DMA_Start();
+
+    /* Start 100 ms timer */
+    HAL_TIM_Base_Start_IT(&htim3);
+
+    while (1) {
+        /* Toggle onboard LED if commanded by Node B */
+        if (led_toggle_request) {
+            HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+            led_toggle_request = 0;
+        }
+
+        /* Check for bus-off and attempt recovery */
+        uint32_t error = HAL_CAN_GetError(&hcan);
+        if (error & HAL_CAN_ERROR_BOF) {
+            HAL_CAN_Stop(&hcan);
+            HAL_Delay(100);
+            HAL_CAN_Start(&hcan);
+            HAL_CAN_ActivateNotification(&hcan,
+                CAN_IT_RX_FIFO0_MSG_PENDING |
+                CAN_IT_BUSOFF);
+        }
+
+        HAL_Delay(10);
+    }
+}
+```
+
+## Node B: Display Node Code
+
+<InArticleAd />
+
+### CAN Filter Configuration (Mask Mode)
+
+Node B uses mask mode filtering to accept only messages with IDs in the range 0x100 to 0x1FF (sensor data) and the heartbeat ID 0x001. Two filter banks handle this.
+
+```c title="can_filter.c (Node B)"
+void CAN_FilterConfig_NodeB(void)
+{
+    CAN_FilterTypeDef filter;
+
+    /* Filter bank 0: Accept IDs 0x100 to 0x1FF */
+    filter.FilterBank = 0;
+    filter.FilterMode = CAN_FILTERMODE_IDMASK;
+    filter.FilterScale = CAN_FILTERSCALE_32BIT;
+    /* ID 0x100 shifted to match register position */
+    filter.FilterIdHigh = (0x100 << 5);
+    filter.FilterIdLow = 0x0000;
+    /* Mask: check bits 8-10 (must be 001) */
+    filter.FilterMaskIdHigh = (0x700 << 5);
+    filter.FilterMaskIdLow = 0x0000;
+    filter.FilterFIFOAssignment = CAN_RX_FIFO0;
+    filter.FilterActivation = ENABLE;
+    filter.SlaveStartFilterBank = 14;
+    HAL_CAN_ConfigFilter(&hcan, &filter);
+
+    /* Filter bank 1: Accept heartbeat ID 0x001 */
+    filter.FilterBank = 1;
+    filter.FilterMode = CAN_FILTERMODE_IDLIST;
+    filter.FilterScale = CAN_FILTERSCALE_32BIT;
+    filter.FilterIdHigh = (0x001 << 5);
+    filter.FilterIdLow = 0x0000;
+    filter.FilterMaskIdHigh = (0x001 << 5);
+    filter.FilterMaskIdLow = 0x0000;
+    filter.FilterFIFOAssignment = CAN_RX_FIFO0;
+    filter.FilterActivation = ENABLE;
+    HAL_CAN_ConfigFilter(&hcan, &filter);
+}
+```
+
+### CAN Receive and Processing
+
+```c title="can_rx.c (Node B)"
+/* Global receive data */
+volatile uint16_t received_adc_value = 0;
+volatile uint8_t received_heartbeat = 0;
+volatile uint8_t new_data_flag = 0;
+volatile uint8_t heartbeat_flag = 0;
+
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan_ptr)
+{
+    CAN_RxHeaderTypeDef rx_header;
+    uint8_t rx_data[8];
+
+    HAL_CAN_GetRxMessage(hcan_ptr, CAN_RX_FIFO0, &rx_header, rx_data);
+
+    if (rx_header.StdId == 0x100 && rx_header.DLC >= 2) {
+        received_adc_value = ((uint16_t)rx_data[0] << 8) | rx_data[1];
+        new_data_flag = 1;
+    }
+    else if (rx_header.StdId == 0x001 && rx_header.DLC >= 1) {
+        received_heartbeat = rx_data[0];
+        heartbeat_flag = 1;
+    }
+}
+```
+
+### Send Command from Node B
+
+```c title="can_command.c (Node B)"
+/* Send toggle LED command to Node A (ID 0x200) */
+HAL_StatusTypeDef CAN_SendToggleCommand(void)
+{
+    CAN_TxHeaderTypeDef tx_header;
+    uint8_t tx_data[1];
+    uint32_t tx_mailbox;
+
+    tx_header.StdId = 0x200;
+    tx_header.ExtId = 0;
+    tx_header.RTR = CAN_RTR_DATA;
+    tx_header.IDE = CAN_ID_STD;
+    tx_header.DLC = 1;
+    tx_header.TransmitGlobalTime = DISABLE;
+
+    tx_data[0] = 0x01;  /* Toggle command */
+
+    return HAL_CAN_AddTxMessage(&hcan, &tx_header, tx_data, &tx_mailbox);
+}
+```
+
+### UART Printf Redirect
+
+```c title="uart_printf.c (Node B)"
+#include <stdio.h>
+
+/* Redirect printf to USART2 */
+int _write(int file, char *ptr, int len)
+{
+    HAL_UART_Transmit(&huart2, (uint8_t *)ptr, len, HAL_MAX_DELAY);
+    return len;
+}
+```
+
+### Node B main() Function
+
+```c title="main.c (Node B)"
+int main(void)
+{
+    HAL_Init();
+    SystemClock_Config();
+    MX_GPIO_Init();
+    MX_CAN_Init();
+    MX_USART2_UART_Init();
+    MX_TIM1_Init();
+
+    /* Configure CAN filters for Node B */
+    CAN_FilterConfig_NodeB();
+
+    /* Start CAN */
+    HAL_CAN_Start(&hcan);
+    HAL_CAN_ActivateNotification(&hcan,
+        CAN_IT_RX_FIFO0_MSG_PENDING |
+        CAN_IT_ERROR_WARNING |
+        CAN_IT_BUSOFF);
+
+    /* Start PWM on TIM1 CH1 (PA8) */
+    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);
+
+    printf("Node B: CAN receiver ready\r\n");
+
+    uint8_t button_prev = GPIO_PIN_SET;
+
+    while (1) {
+        /* Process received sensor data */
+        if (new_data_flag) {
+            new_data_flag = 0;
+            uint16_t val = received_adc_value;
+
+            /* Scale 12-bit ADC (0-4095) to PWM range (0-999) */
+            uint32_t pwm_duty = (val * 999) / 4095;
+            __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, pwm_duty);
+
+            printf("ADC: %u  PWM: %lu\r\n", val, pwm_duty);
+        }
+
+        /* Print heartbeat */
+        if (heartbeat_flag) {
+            heartbeat_flag = 0;
+            printf("Heartbeat: %u\r\n", received_heartbeat);
+        }
+
+        /* Button press sends toggle command to Node A */
+        uint8_t button_now = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0);
+        if (button_prev == GPIO_PIN_SET && button_now == GPIO_PIN_RESET) {
+            CAN_SendToggleCommand();
+            printf("Sent toggle command\r\n");
+        }
+        button_prev = button_now;
+
+        /* Bus-off recovery */
+        uint32_t error = HAL_CAN_GetError(&hcan);
+        if (error & HAL_CAN_ERROR_BOF) {
+            printf("CAN bus-off, recovering...\r\n");
+            HAL_CAN_Stop(&hcan);
+            HAL_Delay(100);
+            HAL_CAN_Start(&hcan);
+            HAL_CAN_ActivateNotification(&hcan,
+                CAN_IT_RX_FIFO0_MSG_PENDING |
+                CAN_IT_BUSOFF);
+        }
+
+        HAL_Delay(10);
+    }
+}
+```
+
+## CAN Error Handling
+
+<InArticleAd />
+
+The bxCAN peripheral tracks three error counters and transitions through error states automatically:
+
+| State | TEC / REC | Behavior |
+|-------|-----------|----------|
+| Error Active | Both below 128 | Normal operation, sends active error flags |
+| Error Passive | Either at 128 or above | Sends passive error flags, waits longer between retransmits |
+| Bus Off | TEC at 256 or above | Node disconnects from bus, requires 128 x 11 recessive bits to rejoin |
+
+TEC is the Transmit Error Counter and REC is the Receive Error Counter. You can read both from the CAN ESR register:
+
+```c title="error_check.c"
+void CAN_PrintErrorCounters(void)
+{
+    uint32_t esr = hcan.Instance->ESR;
+    uint8_t tec = (esr >> 16) & 0xFF;
+    uint8_t rec = (esr >> 24) & 0xFF;
+    printf("TEC: %u  REC: %u\r\n", tec, rec);
+}
+```
+
+## CubeMX Project Structure
+
+<FileTree>
+- NodeA_CAN/
+  - Core/
+    - Inc/
+      - main.h
+      - stm32f1xx_hal_conf.h
+      - stm32f1xx_it.h
+      - ring_buffer.h
+    - Src/
+      - main.c
+      - stm32f1xx_hal_msp.c
+      - stm32f1xx_it.c
+      - system_stm32f1xx.c
+  - Drivers/
+    - CMSIS/
+    - STM32F1xx_HAL_Driver/
+  - NodeA_CAN.ioc
+- NodeB_CAN/
+  - Core/
+    - Inc/
+      - main.h
+      - stm32f1xx_hal_conf.h
+      - stm32f1xx_it.h
+    - Src/
+      - main.c
+      - stm32f1xx_hal_msp.c
+      - stm32f1xx_it.c
+      - system_stm32f1xx.c
+  - Drivers/
+    - CMSIS/
+    - STM32F1xx_HAL_Driver/
+  - NodeB_CAN.ioc
+</FileTree>
+
+## Testing the Network
+
+<Steps>
+1. **Flash Node A** with its firmware using ST-Link.
+
+2. **Flash Node B** with its firmware using the same ST-Link (move the SWD cable between boards).
+
+3. **Connect a serial terminal** (115200 baud) to Node B's USART2 (PA2). You should see ADC values and heartbeat messages printed every 100 ms and 1 second respectively.
+
+4. **Turn the potentiometer** on Node A. The ADC value printed on Node B should change smoothly from 0 to 4095, and the LED on Node B should vary in brightness.
+
+5. **Press the button** on Node B. Node A's onboard LED (PC13) should toggle.
+
+6. **Disconnect one termination resistor** to observe CAN errors. The error counters will rise, and you may see bus-off recovery messages.
+</Steps>
+
+## Production Notes
+
+<Card title="Moving to Production" icon="setting">
+**CAN bus wiring:** Use twisted pair cable for CANH and CANL. Keep stub lengths under 30 cm at each node tap. For runs longer than a few meters, use shielded cable with the shield grounded at one end.
+
+**Termination:** Always 120 ohm at each physical end of the bus. In a two-node setup, both nodes are endpoints. In a multi-node linear bus, only the two endpoints get terminators.
+
+**EMC considerations:** Add common-mode chokes on CANH/CANL at each node for production designs. Place decoupling capacitors (100 nF) close to the MCP2551 VCC pin. Consider ESD protection diodes (e.g., PESD1CAN) on CANH/CANL for automotive environments.
+
+**CAN FD upgrade path:** The STM32F103 bxCAN peripheral supports classic CAN only (up to 1 Mbps, 8 bytes payload). For CAN FD (up to 8 Mbps, 64 bytes payload), consider the STM32G4 or STM32H7 families which include the FDCAN peripheral. The HAL API is similar, so the application logic ports with minimal changes.
+
+**DMA priority:** In production firmware, assign DMA priorities carefully. ADC DMA should be high priority to avoid overrun. SPI DMA for displays can be medium priority since dropping a display frame is less critical than losing sensor data.
+</Card>
+
+## What You Learned
+
+<Card title="Lesson 9 Summary" icon="star">
+**DMA skills:**
+- DMA controller channel assignments on the STM32F1
+- Circular mode for continuous ADC sampling without CPU intervention
+- Half-transfer and transfer-complete interrupts for double buffering
+
+**Interrupt architecture:**
+- NVIC priority grouping (preemption vs sub-priority)
+- ISR safety rules: no printf, keep handlers short, use volatile for shared data
+- Ring buffer pattern for interrupt-safe data transfer
+
+**CAN bus skills:**
+- Differential signaling, bus arbitration, frame format, bit timing calculation
+- bxCAN peripheral configuration: prescaler, BS1, BS2 for 500 kbps
+- Transmit mailboxes and receive FIFOs
+- Mask mode and list mode filter configuration
+- Error state machine: active, passive, bus-off, and recovery
+
+**System integration:**
+- DMA ADC feeding data into CAN transmit on a timer interrupt
+- Two-node communication with bidirectional messaging
+- MCP2551 transceiver wiring with proper termination
+</Card>
+
+:::tip[Next Lesson]
+In [Lesson 10: Capstone: Multi-Sensor Data Logger](/education/sensor-actuator-interfacing-stm32/multi-sensor-data-logger), you will combine sensors, storage, display, and wireless communication from all previous lessons into one integrated environmental monitoring station with SD card logging, OLED display, Bluetooth streaming, and alarm outputs.
+:::
+
+<Copyright />
+<SensorActuatorInterfacingStm32Comments />
+<TawkWidget />

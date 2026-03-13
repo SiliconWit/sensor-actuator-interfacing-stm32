@@ -1,0 +1,584 @@
+---
+title: "ADC and Analog Signal Conditioning"
+description: "Configure the STM32 12-bit ADC with single, continuous, and scan modes. Add signal conditioning circuits and build a multi-channel environmental monitor with LED bar graph"
+contributors: "sam-macharia,lawrence-langat"
+pubDate: 2026-03-02
+tags: ["stm32", "adc", "dma", "thermistor", "signal-conditioning", "op-amp"]
+excerpt: "Read analog sensors through the STM32's 12-bit ADC using polling, continuous, and DMA scan modes. Design voltage dividers, RC filters, and op-amp buffers for clean signal conditioning. Build a multi-channel environmental monitor that reads temperature, light level, and a user threshold, then displays results on an LED bar graph and serial terminal."
+heroImage: "https://cdn.siliconwit.com/education/sensor-actuator-interfacing-stm32/adc-analog-signal-conditioning.png"
+---
+
+import TawkWidget from '../../../../components/TawkWidget.astro';
+import UniversalContentContributors from '../../../../components/UniversalContentContributors.astro';
+import InArticleAd from '../../../../components/InArticleAd.astro';
+import Copyright from '../../../../components/Copyright.astro';
+import TailwindWrapper from '../../../../components/TailwindWrapper.jsx';
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import { Card, CardGrid, Badge, Steps, LinkButton, FileTree } from '@astrojs/starlight/components';
+import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
+
+<UniversalContentContributors
+  contributors={frontmatter.contributors}
+/>
+
+Most real-world signals are analog: temperature, light intensity, pressure, position. The STM32's 12-bit ADC converts these continuous voltages into discrete numbers your firmware can process. But raw sensor signals are often noisy, weakly driven, or outside the ADC's input range. This lesson covers the full path from sensor to digital value: voltage dividers, RC filters, op-amp buffers, and the ADC in single, continuous, and DMA scan modes. The project ties it all together into an environmental monitor that reads three analog channels simultaneously. #STM32 #ADC #SignalConditioning
+
+## What We Are Building
+
+<Card title="Multi-Channel Environmental Monitor" icon="star">
+An environmental monitoring system that reads temperature (NTC thermistor), ambient light (LDR), and a user-adjustable threshold (potentiometer) through three ADC channels. The ADC runs in continuous scan mode with DMA, so the CPU never has to wait for conversions. Temperature is computed using the Steinhart-Hart equation. An LED bar graph (5 LEDs) shows the temperature level visually. The potentiometer sets an alarm threshold: when the temperature exceeds it, the on-board LED blinks. All readings print to a serial terminal over UART2 at 115200 baud.
+</Card>
+
+**Project specifications:**
+
+| Parameter | Value |
+|-----------|-------|
+| Board | Blue Pill (STM32F103C8T6, WeAct) |
+| System clock | 72 MHz (HSE 8 MHz + PLL x9) |
+| ADC clock | 12 MHz (APB2 72 MHz / 6) |
+| ADC resolution | 12-bit (0 to 4095) |
+| ADC mode | Continuous scan with DMA circular |
+| Channel 0 (PA0) | Potentiometer (threshold control) |
+| Channel 1 (PA1) | NTC 10K thermistor (voltage divider) |
+| Channel 4 (PA4) | LDR (voltage divider) |
+| LED bar graph | PB0, PB1, PB3, PB4, PB5 |
+| Alarm indicator | PC13 (on-board LED, active low) |
+| Serial output | USART2 TX on PA2 (115200 baud) |
+| Update rate | 4 Hz on serial terminal |
+| Sampling time | 239.5 cycles per channel |
+
+### Bill of Materials
+
+| Component | Quantity | Notes |
+|-----------|----------|-------|
+| Blue Pill (STM32F103C8T6) | 1 | From Lesson 1 |
+| ST-Link V2 clone | 1 | From Lesson 1 |
+| NTC 10K thermistor | 1 | B-value ~3950K |
+| LDR (photoresistor) | 1 | Resistance varies with light |
+| Potentiometer (10K) | 1 | Linear taper |
+| LM358 op-amp | 1 | Dual op-amp, single supply |
+| Resistors (10K) | 3 | Voltage divider fixed resistors |
+| Resistor (1K) | 1 | RC filter |
+| Capacitor (100 nF ceramic) | 2 | RC filter and decoupling |
+| LEDs (5x, any color) | 5 | Bar graph display |
+| Resistors (330 ohm) | 5 | LED current limiting |
+| USB-to-serial adapter | 1 | For UART2 output (or use SWV) |
+| Breadboard + jumper wires | 1 set | From Lesson 1 |
+
+## STM32 ADC Architecture
+
+<InArticleAd />
+
+The STM32F103C8T6 has two ADC peripherals (ADC1 and ADC2), each with 12-bit resolution and up to 1 MHz sample rate. Key parameters you need to understand before configuring the ADC:
+
+| Parameter | Value | Why It Matters |
+|-----------|-------|---------------|
+| Resolution | 12 bits | 4096 steps from 0 to VDDA |
+| Reference voltage (VDDA) | 3.3V | Full scale. 1 LSB = 3.3V / 4096 = 0.806 mV |
+| Input impedance | Varies with sampling time | Short sampling time requires low source impedance |
+| Sampling time | 1.5 to 239.5 ADC clock cycles | Longer time allows higher impedance sources |
+| ADC clock | 14 MHz maximum | Derived from APB2 with prescaler /2, /4, /6, or /8 |
+| Conversion time | Sampling time + 12.5 cycles | At 12 MHz: 239.5 + 12.5 = 252 cycles = 21 us per channel |
+
+### Input Impedance and Sampling Time
+
+The ADC input has a sample-and-hold capacitor (about 8 pF internally). During the sampling phase, this capacitor must charge to the input voltage through the source impedance. The datasheet recommends keeping the source impedance below 10K ohm for accurate readings. Longer sampling times allow higher source impedance because the capacitor has more time to settle.
+
+For our sensors, a 239.5-cycle sampling time is generous but ensures accuracy even with the high impedance of the thermistor voltage divider (5K Thevenin equivalent). At 12 MHz ADC clock, each channel takes 21 us, and three channels complete in 63 us. That is fast enough for environmental monitoring.
+
+## Single Channel Conversion: Reading the Potentiometer
+
+The simplest ADC usage reads one channel and waits for the result. Connect the potentiometer with its outer pins to 3.3V and GND, and the wiper to PA0.
+
+### CubeMX Configuration for Single Channel
+
+<Steps>
+1. **Analog > ADC1**: enable **IN0** (PA0). Set the sampling time to 239.5 cycles.
+
+2. **ADC Settings**: keep the default mode (single conversion, no scan, no continuous). This is the simplest starting point.
+
+3. **Generate code** and open `main.c`.
+</Steps>
+
+```c title="Single channel polling"
+/* USER CODE BEGIN 2 */
+uint32_t adc_raw;
+float voltage;
+
+HAL_ADC_Start(&hadc1);
+/* USER CODE END 2 */
+
+while (1) {
+    HAL_ADC_PollForConversion(&hadc1, 10);
+    adc_raw = HAL_ADC_GetValue(&hadc1);
+    voltage = (float)adc_raw * 3.3f / 4095.0f;
+    HAL_ADC_Start(&hadc1);  /* Restart for next conversion */
+    HAL_Delay(250);
+}
+```
+
+This works but blocks the CPU during conversion. For multiple channels, we need scan mode with DMA.
+
+## Voltage Divider Sensors
+
+<InArticleAd />
+
+### NTC Thermistor
+
+An NTC (Negative Temperature Coefficient) thermistor decreases in resistance as temperature rises. A 10K NTC has 10K ohm at 25 degrees C, about 27K at 0 degrees C, and about 4K at 50 degrees C.
+
+Place the thermistor in a voltage divider with a fixed 10K resistor:
+
+```
+3.3V --- [NTC Thermistor] ---+--- PA1 (ADC Channel 1)
+                              |
+                         [10K fixed]
+                              |
+                             GND
+```
+
+The voltage at PA1 is:
+
+$$
+V_{ADC} = 3.3 \times \frac{R_{fixed}}{R_{NTC} + R_{fixed}}
+$$
+
+At 25 degrees C: $V_{ADC} = 3.3 \times \frac{10000}{10000 + 10000} = 1.65$ V (mid-range, which maximizes sensitivity).
+
+### Steinhart-Hart Equation
+
+Converting the ADC reading to temperature requires the Steinhart-Hart equation, which models the NTC resistance-temperature relationship:
+
+$$
+\frac{1}{T} = A + B \cdot \ln(R) + C \cdot (\ln(R))^3
+$$
+
+where $T$ is in Kelvin. For a typical 10K NTC with B-value of 3950K, the simplified Beta equation is often accurate enough:
+
+$$
+\frac{1}{T} = \frac{1}{T_0} + \frac{1}{B} \cdot \ln\left(\frac{R}{R_0}\right)
+$$
+
+where $T_0 = 298.15$ K (25 degrees C), $R_0 = 10000$ ohm, and $B = 3950$.
+
+```c title="Temperature calculation"
+float ADC_To_Temperature(uint32_t adc_value) {
+    /* Convert ADC to resistance */
+    float v_adc = (float)adc_value * 3.3f / 4095.0f;
+    float r_ntc = 10000.0f * (3.3f - v_adc) / v_adc;
+
+    /* Beta equation */
+    float t_kelvin = 1.0f / (
+        (1.0f / 298.15f) + (1.0f / 3950.0f) * logf(r_ntc / 10000.0f)
+    );
+    float t_celsius = t_kelvin - 273.15f;
+
+    return t_celsius;
+}
+```
+
+### LDR (Light Dependent Resistor)
+
+An LDR varies from about 1M ohm in darkness to about 100 ohm in bright light. Use a 10K fixed resistor in the same voltage divider configuration:
+
+```
+3.3V --- [LDR] ---+--- PA4 (ADC Channel 4)
+                   |
+              [10K fixed]
+                   |
+                  GND
+```
+
+Converting to approximate lux is empirical. A rough formula for a typical LDR:
+
+$$
+\text{lux} \approx 500 \times \left(\frac{3.3 \times R_{fixed}}{V_{ADC} \times (R_{LDR} + R_{fixed})} \right)^{-1.4}
+$$
+
+In practice, you calibrate against a known light source. For this project, we display the raw percentage (0 to 100%) and a rough lux estimate.
+
+```c title="Light level calculation"
+float ADC_To_LightPercent(uint32_t adc_value) {
+    return ((float)adc_value / 4095.0f) * 100.0f;
+}
+
+float ADC_To_Lux_Approx(uint32_t adc_value) {
+    if (adc_value < 10) return 0.0f;
+    float v_adc = (float)adc_value * 3.3f / 4095.0f;
+    float r_ldr = 10000.0f * (3.3f - v_adc) / v_adc;
+    /* Empirical approximation; calibrate for your specific LDR */
+    float lux = 500000.0f / r_ldr;
+    return lux;
+}
+```
+
+## Signal Conditioning
+
+### RC Low-Pass Filter
+
+Analog signals pick up noise from nearby digital switching, power supply ripple, and electromagnetic interference. A first-order RC low-pass filter attenuates noise above its cutoff frequency:
+
+$$
+f_c = \frac{1}{2\pi RC}
+$$
+
+For temperature monitoring, the signal changes slowly (seconds). A cutoff frequency of 1.6 kHz (R = 1K, C = 100 nF) removes high-frequency noise while passing the sensor signal through with no visible lag. Place the filter between the voltage divider output and the ADC input pin.
+
+```
+Voltage divider output --- [1K] ---+--- PA1 (to ADC)
+                                    |
+                               [100 nF]
+                                    |
+                                   GND
+```
+
+### Op-Amp Buffer (LM358 Voltage Follower)
+
+The thermistor voltage divider has a Thevenin output impedance of about 5K ohm (two 10K resistors in parallel). While the long ADC sampling time handles this, a voltage follower guarantees the source impedance is under 100 ohm regardless of the sensor.
+
+The LM358 is a dual op-amp that runs on a single 3.3V supply. Wire one half as a voltage follower:
+
+```
+Voltage divider output ---> (+) LM358
+                             (−) <--- output ---> PA1 (to ADC)
+```
+
+The output follows the input exactly, but can supply milliamps of current to charge the ADC sampling capacitor instantly. The second op-amp in the LM358 package can buffer the LDR channel.
+
+**Rail-to-rail note.** The LM358 output cannot swing all the way to the positive rail. On a 3.3V supply, the maximum output is about 2.0 to 2.5V (depends on load). This means your ADC will never see voltages above about 2.5V from the buffered output. For a temperature sensor that operates in the 1.0 to 2.5V range, this is acceptable. If you need full 0 to 3.3V swing, use a rail-to-rail op-amp like the MCP6002 or TLV2372 instead.
+
+## Multi-Channel Scan Mode with DMA
+
+<InArticleAd />
+
+Reading three channels one at a time with polling is wasteful. The STM32 ADC supports scan mode, where it converts a sequence of channels automatically. Combined with DMA (Direct Memory Access), the conversion results are transferred to a memory buffer without any CPU intervention.
+
+### CubeMX Configuration for DMA Scan Mode
+
+<Steps>
+1. **Analog > ADC1**: enable **IN0** (PA0), **IN1** (PA1), and **IN4** (PA4). Set sampling time to 239.5 cycles for all three.
+
+2. **ADC1 Parameter Settings**: set Scan Conversion Mode to **Enabled**, Continuous Conversion Mode to **Enabled**, Number of Conversions to **3**. Configure the rank sequence: Rank 1 = Channel 0 (pot), Rank 2 = Channel 1 (thermistor), Rank 3 = Channel 4 (LDR).
+
+3. **DMA Settings tab for ADC1**: click **Add** and select ADC1. Set Mode to **Circular**, Data Width to **Half Word** (16-bit), and enable Memory increment. Circular mode means DMA restarts from the beginning of the buffer automatically.
+
+4. **Connectivity > USART2**: enable in Asynchronous mode, 115200 baud, 8N1. This uses PA2 (TX) and PA3 (RX).
+
+5. **GPIO Outputs**: configure PB0, PB1, PB3, PB4, PB5 as GPIO_Output for the LED bar graph. Configure PC13 as GPIO_Output for the alarm LED.
+
+6. **Generate code.**
+</Steps>
+
+### DMA Buffer
+
+DMA needs a memory buffer that it writes to continuously. Declare it as a global array:
+
+```c title="DMA buffer declaration"
+/* USER CODE BEGIN PV */
+volatile uint16_t adc_dma_buf[3];  /* [0]=pot, [1]=thermistor, [2]=ldr */
+/* USER CODE END PV */
+```
+
+Start the ADC with DMA in the initialization section:
+
+```c title="Start ADC with DMA"
+/* USER CODE BEGIN 2 */
+HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_dma_buf, 3);
+/* USER CODE END 2 */
+```
+
+From this point, `adc_dma_buf` is updated continuously by hardware. The CPU can read the values at any time without starting a conversion or waiting.
+
+## Printf Over UART
+
+To print readings to a serial terminal, redirect `printf` to UART2 by overriding `_write`:
+
+```c title="Printf redirection"
+/* USER CODE BEGIN 0 */
+#include <stdio.h>
+#include <math.h>
+
+int _write(int file, char *ptr, int len) {
+    HAL_UART_Transmit(&huart2, (uint8_t *)ptr, len, HAL_MAX_DELAY);
+    return len;
+}
+/* USER CODE END 0 */
+```
+
+In the project settings, enable "Use float with printf" under **C/C++ Build > Settings > MCU Settings** so that `%f` format works with floating point values.
+
+## Wiring Diagram
+
+| Blue Pill Pin | Connection | Notes |
+|---------------|------------|-------|
+| PA0 | Potentiometer wiper | Outer pins to 3.3V and GND |
+| PA1 | Thermistor voltage divider output | Through RC filter (1K + 100nF) to pin |
+| PA2 | USART2 TX | To USB-serial adapter RX |
+| PA3 | USART2 RX | To USB-serial adapter TX |
+| PA4 | LDR voltage divider output | Through RC filter if desired |
+| PB0 | LED bar 1 (lowest) | Through 330 ohm to GND |
+| PB1 | LED bar 2 | Through 330 ohm to GND |
+| PB3 | LED bar 3 | Through 330 ohm to GND |
+| PB4 | LED bar 4 | Through 330 ohm to GND |
+| PB5 | LED bar 5 (highest) | Through 330 ohm to GND |
+| PC13 | On-board LED | Active low, alarm indicator |
+| 3.3V | Sensor dividers, pot, LM358 VCC | Common 3.3V rail |
+| GND | Common ground | All GNDs connected |
+| PA13 | ST-Link SWDIO | Debug interface |
+| PA14 | ST-Link SWCLK | Debug interface |
+
+**LM358 wiring (optional buffer):**
+
+| LM358 Pin | Connection | Notes |
+|-----------|------------|-------|
+| Pin 8 (VCC) | 3.3V | Single supply |
+| Pin 4 (GND) | GND | |
+| Pin 3 (IN1+) | Thermistor divider output | Before RC filter |
+| Pin 2 (IN1−) | Pin 1 (OUT1) | Feedback for voltage follower |
+| Pin 1 (OUT1) | PA1 through RC filter | Buffered thermistor signal |
+| Pin 5 (IN2+) | LDR divider output | |
+| Pin 6 (IN2−) | Pin 7 (OUT2) | Feedback for voltage follower |
+| Pin 7 (OUT2) | PA4 | Buffered LDR signal |
+
+## Complete Project Code
+
+<InArticleAd />
+
+```c title="main.c"
+/* USER CODE BEGIN Header */
+/**
+  * Environmental Monitor - ADC and Analog Signal Conditioning
+  * Sensor and Actuator Interfacing with STM32, Lesson 2
+  *
+  * Reads thermistor, LDR, and potentiometer via ADC with DMA.
+  * Displays temperature on LED bar graph and prints to UART.
+  */
+/* USER CODE END Header */
+
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+
+/* USER CODE BEGIN Includes */
+#include <stdio.h>
+#include <math.h>
+/* USER CODE END Includes */
+
+/* USER CODE BEGIN PV */
+volatile uint16_t adc_dma_buf[3];  /* [0]=pot, [1]=thermistor, [2]=ldr */
+
+/* Thermistor constants */
+#define NTC_R0         10000.0f   /* Resistance at T0 (ohms) */
+#define NTC_T0         298.15f    /* Reference temperature (25C in Kelvin) */
+#define NTC_BETA       3950.0f    /* Beta coefficient */
+#define R_FIXED        10000.0f   /* Fixed resistor in voltage divider */
+
+/* LED bar graph temperature range */
+#define TEMP_BAR_MIN   15.0f      /* Minimum temperature for bar graph */
+#define TEMP_BAR_MAX   40.0f      /* Maximum temperature for bar graph */
+#define TEMP_BAR_STEP  ((TEMP_BAR_MAX - TEMP_BAR_MIN) / 5.0f)
+
+/* Update interval */
+#define PRINT_INTERVAL_MS 250     /* 4 Hz update rate */
+/* USER CODE END PV */
+
+/* USER CODE BEGIN PFP */
+float ADC_To_Temperature(uint32_t adc_value);
+float ADC_To_LightPercent(uint32_t adc_value);
+float ADC_To_Lux_Approx(uint32_t adc_value);
+float ADC_To_Voltage(uint32_t adc_value);
+void UpdateLedBarGraph(float temperature);
+void CheckAlarmThreshold(float temperature, float threshold_voltage);
+/* USER CODE END PFP */
+
+/* USER CODE BEGIN 0 */
+int _write(int file, char *ptr, int len) {
+    HAL_UART_Transmit(&huart2, (uint8_t *)ptr, len, HAL_MAX_DELAY);
+    return len;
+}
+
+float ADC_To_Voltage(uint32_t adc_value) {
+    return (float)adc_value * 3.3f / 4095.0f;
+}
+
+float ADC_To_Temperature(uint32_t adc_value) {
+    if (adc_value < 10 || adc_value > 4085) return -999.0f;
+
+    float v_adc = ADC_To_Voltage(adc_value);
+    float r_ntc = R_FIXED * (3.3f - v_adc) / v_adc;
+
+    /* Beta equation: 1/T = 1/T0 + (1/B) * ln(R/R0) */
+    float t_kelvin = 1.0f / (
+        (1.0f / NTC_T0) + (1.0f / NTC_BETA) * logf(r_ntc / NTC_R0)
+    );
+    return t_kelvin - 273.15f;
+}
+
+float ADC_To_LightPercent(uint32_t adc_value) {
+    return ((float)adc_value / 4095.0f) * 100.0f;
+}
+
+float ADC_To_Lux_Approx(uint32_t adc_value) {
+    if (adc_value < 10) return 0.0f;
+    float v_adc = ADC_To_Voltage(adc_value);
+    float r_ldr = R_FIXED * (3.3f - v_adc) / v_adc;
+    /* Rough empirical approximation; calibrate for your LDR */
+    float lux = 500000.0f / r_ldr;
+    return lux;
+}
+
+void UpdateLedBarGraph(float temperature) {
+    /* 5 LEDs on PB0, PB1, PB3, PB4, PB5 */
+    /* Each LED represents one step of the temperature range */
+    uint8_t level = 0;
+    if (temperature > TEMP_BAR_MIN) {
+        level = (uint8_t)((temperature - TEMP_BAR_MIN) / TEMP_BAR_STEP);
+        if (level > 5) level = 5;
+    }
+
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0,
+        (level >= 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1,
+        (level >= 2) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3,
+        (level >= 3) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4,
+        (level >= 4) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5,
+        (level >= 5) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+void CheckAlarmThreshold(float temperature, float threshold_voltage) {
+    /*
+     * Map the pot voltage (0 to 3.3V) to a temperature threshold
+     * 0V = 15C, 3.3V = 40C
+     */
+    float threshold_temp = TEMP_BAR_MIN
+        + (threshold_voltage / 3.3f) * (TEMP_BAR_MAX - TEMP_BAR_MIN);
+
+    if (temperature > threshold_temp) {
+        /* Alarm: blink on-board LED (active low) */
+        HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+    } else {
+        /* No alarm: LED off (HIGH because active low) */
+        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
+    }
+}
+/* USER CODE END 0 */
+
+int main(void) {
+    /* USER CODE BEGIN 1 */
+    /* USER CODE END 1 */
+
+    HAL_Init();
+    SystemClock_Config();
+    MX_GPIO_Init();
+    MX_ADC1_Init();
+    MX_DMA_Init();
+    MX_USART2_UART_Init();
+
+    /* USER CODE BEGIN 2 */
+    /* Calibrate ADC (recommended on STM32F1) */
+    HAL_ADCEx_Calibration_Start(&hadc1);
+
+    /* Start ADC in continuous scan mode with DMA circular */
+    HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_dma_buf, 3);
+
+    printf("\r\n--- Environmental Monitor ---\r\n");
+    printf("Pot (V) | Temp (C) | Light (%%) | Lux   | Threshold\r\n");
+    printf("--------|----------|-----------|-------|----------\r\n");
+    /* USER CODE END 2 */
+
+    /* USER CODE BEGIN WHILE */
+    while (1) {
+        /* Read DMA buffer (updated continuously by hardware) */
+        uint16_t pot_raw   = adc_dma_buf[0];
+        uint16_t therm_raw = adc_dma_buf[1];
+        uint16_t ldr_raw   = adc_dma_buf[2];
+
+        /* Convert to physical units */
+        float pot_voltage   = ADC_To_Voltage(pot_raw);
+        float temperature   = ADC_To_Temperature(therm_raw);
+        float light_pct     = ADC_To_LightPercent(ldr_raw);
+        float lux_approx    = ADC_To_Lux_Approx(ldr_raw);
+
+        /* Update LED bar graph based on temperature */
+        UpdateLedBarGraph(temperature);
+
+        /* Check alarm threshold */
+        CheckAlarmThreshold(temperature, pot_voltage);
+
+        /* Print to serial terminal */
+        printf("\r%5.2fV  | %5.1fC   | %5.1f%%    | %5.0f | %5.1fC   ",
+            pot_voltage,
+            temperature,
+            light_pct,
+            lux_approx,
+            TEMP_BAR_MIN + (pot_voltage / 3.3f)
+                * (TEMP_BAR_MAX - TEMP_BAR_MIN));
+
+        HAL_Delay(PRINT_INTERVAL_MS);
+        /* USER CODE END WHILE */
+    }
+    /* USER CODE BEGIN 3 */
+    /* USER CODE END 3 */
+}
+```
+
+### How the Code Works
+
+<Steps>
+1. **ADC calibration** runs once at startup. The STM32F1 ADC has a built-in self-calibration routine that compensates for internal offset errors. Always call this before the first conversion.
+
+2. **HAL_ADC_Start_DMA** launches the ADC in continuous scan mode. DMA transfers each conversion result into `adc_dma_buf[0..2]` in the order defined by the scan sequence (Rank 1, 2, 3). In circular mode, DMA wraps back to index 0 after the last channel, so the buffer always contains the most recent readings.
+
+3. **ADC_To_Temperature** converts the raw ADC value to thermistor resistance using the voltage divider formula, then applies the Beta equation to get temperature in degrees Celsius. The function returns -999 if the ADC value is at the rail (sensor disconnected).
+
+4. **UpdateLedBarGraph** maps the temperature to a 0 to 5 level and lights the corresponding LEDs. At 15 degrees C all LEDs are off; at 40 degrees C all five are lit.
+
+5. **CheckAlarmThreshold** maps the potentiometer voltage to a temperature threshold in the same 15 to 40 degrees C range. When the measured temperature exceeds the threshold, the on-board LED (PC13) blinks. Turning the pot clockwise raises the threshold.
+
+6. **The main loop** reads the DMA buffer, converts values, updates outputs, and prints to the serial terminal at 4 Hz. The DMA runs independently, so the main loop never waits for ADC conversions.
+</Steps>
+
+## Steinhart-Hart vs. Beta Equation
+
+The full Steinhart-Hart equation uses three coefficients (A, B, C) and is accurate across a wide temperature range. The simplified Beta equation uses only one coefficient and is accurate within about 1 degree C over a 50-degree window centered on 25 degrees C. For environmental monitoring (indoor temperatures from 10 to 45 degrees C), the Beta equation is sufficient.
+
+If you need higher accuracy, use the full Steinhart-Hart coefficients from your thermistor datasheet:
+
+```c title="Full Steinhart-Hart (reference)"
+/* Example coefficients for a Murata NCP18XH103F03RB */
+#define SH_A  0.001129148f
+#define SH_B  0.000234125f
+#define SH_C  0.0000000876741f
+
+float SteinhartHart(float resistance) {
+    float ln_r = logf(resistance);
+    float t_inv = SH_A + SH_B * ln_r + SH_C * ln_r * ln_r * ln_r;
+    return (1.0f / t_inv) - 273.15f;
+}
+```
+
+## Production Notes
+
+<Card title="Moving from Breadboard to PCB" icon="setting">
+
+**ADC grounding.** The STM32F103 has separate VDDA and VSSA pins for the analog supply. On a PCB, connect VDDA to 3.3V through a ferrite bead (e.g., BLM18PG121SN1) and place a 1 uF + 100 nF capacitor pair as close to VDDA as possible. Never route digital signals under the ADC input traces.
+
+**Star ground topology.** Run separate ground traces from the analog sensors and from the digital outputs (LEDs, relay) back to a single point near the STM32 GND pin. This prevents switching current from the LEDs from injecting noise into the analog ground.
+
+**Decoupling capacitors.** Place a 100 nF ceramic capacitor within 5 mm of every IC power pin. The LM358, the STM32 VDD pins, and any sensor module VCC each need their own decoupling cap. Use 0402 or 0603 size for short trace lengths.
+
+**Guard traces.** For high-impedance analog inputs (like the thermistor divider), surround the PCB trace with a guard ring connected to the op-amp output or to analog ground. This prevents leakage currents from adjacent traces from corrupting the measurement. A 1 nA leakage across a 10K impedance causes a 10 uV error, which is below 1 LSB, but it adds up in humid environments.
+
+**Thermal considerations.** Mount the NTC thermistor away from heat-generating components (voltage regulators, power resistors). On a PCB, the copper pour acts as a heat sink that can bias the temperature reading. Use a thermal relief pattern or mount the thermistor on a small breakout with minimal copper.
+
+</Card>
+
+:::tip[Debugging ADC readings]
+If the ADC values seem stuck or wrong, check these common issues: (1) DMA initialization must come before ADC initialization in the CubeMX generated code, so verify the call order in `main.c`; (2) the ADC clock must not exceed 14 MHz (check the clock tree); (3) make sure VDDA is actually connected to 3.3V on your Blue Pill (some cheap clones leave this pin floating).
+:::
+
+<Copyright />
+<SensorActuatorInterfacingStm32Comments />
+<TawkWidget />

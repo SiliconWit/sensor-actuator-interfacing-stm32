@@ -1,0 +1,990 @@
+---
+title: "Capstone: Multi-Sensor Data Logger"
+description: "Build a complete environmental monitoring station combining BME280, OLED display, SD card logging, Bluetooth streaming, alarm outputs, and a state machine UI on the STM32 Blue Pill"
+contributors: "sam-macharia,lawrence-langat"
+pubDate: 2026-03-10
+tags: ["stm32", "capstone", "data-logger", "bme280", "oled", "sd-card", "bluetooth", "i2c", "spi", "uart"]
+excerpt: "Combine sensors, storage, display, and wireless from all previous lessons into one integrated system. Manage multiple peripherals sharing I2C and SPI buses, implement a state machine UI, log CSV data to SD card, stream JSON over Bluetooth, and trigger relay and buzzer alarms based on a potentiometer-set temperature threshold."
+heroImage: "https://cdn.siliconwit.com/education/sensor-actuator-interfacing-stm32/multi-sensor-data-logger.png"
+---
+
+import TawkWidget from '../../../../components/TawkWidget.astro';
+import UniversalContentContributors from '../../../../components/UniversalContentContributors.astro';
+import InArticleAd from '../../../../components/InArticleAd.astro';
+import Copyright from '../../../../components/Copyright.astro';
+import TailwindWrapper from '../../../../components/TailwindWrapper.jsx';
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import { Card, CardGrid, Badge, Steps, LinkButton, FileTree } from '@astrojs/starlight/components';
+import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
+
+<UniversalContentContributors
+  contributors={frontmatter.contributors}
+/>
+
+Every lesson in this course focused on one or two peripherals at a time. Real products never work that way. A commercial sensor node reads multiple sensors on a shared bus, logs data to storage, updates a display, streams wirelessly, and triggers alarms, all running concurrently on a single microcontroller. This capstone builds exactly that system. You will integrate the BME280 environmental sensor, SSD1306 OLED display, microSD card, HC-05 Bluetooth module, potentiometer, relay, buzzer, LEDs, and push buttons into one cohesive data logger with a state machine UI. #STM32 #Capstone #DataLogger
+
+## What We Are Building
+
+<Card title="Environmental Monitoring Station" icon="rocket">
+A standalone data acquisition system that reads temperature, humidity, and pressure from a BME280 sensor every 100 ms. The OLED display updates every 500 ms showing live readings and alarm threshold. The system logs CSV data to an SD card every second and streams JSON over Bluetooth every 2 seconds. A potentiometer sets the temperature alarm threshold. When temperature exceeds the threshold, a relay activates and a buzzer sounds an alarm pattern. Two push buttons cycle display pages and arm/disarm the alarm. Status LEDs indicate system state: green for normal, yellow for warning, red for alarm.
+</Card>
+
+**System overview:**
+
+| Subsystem | Peripheral | Bus | Update Rate |
+|-----------|-----------|-----|-------------|
+| Temperature, humidity, pressure | BME280 | I2C1 (PB6/PB7) | 100 ms |
+| Display | SSD1306 OLED 128x64 | I2C1 (PB6/PB7) | 500 ms |
+| Data storage | microSD card module | SPI1 (PA5/PA6/PA7, CS=PA4) | 1 s |
+| Wireless | HC-05 Bluetooth | USART2 (PA2/PA3) | 2 s |
+| Threshold input | 10K potentiometer | ADC1 (PA0) | 100 ms |
+| Alarm output | Relay module | GPIO (PB12) | On threshold |
+| Audio alarm | Passive buzzer | GPIO (PB13) | On threshold |
+| User input | 2x push buttons | GPIO (PB0, PB1) | Polled |
+| Status | 3x LEDs (green, yellow, red) | GPIO (PB14, PB15, PA8) | Continuous |
+
+## Parts List
+
+All parts are reused from previous lessons in this course.
+
+| Part | From Lesson | Bus/Pin |
+|------|------------|---------|
+| Blue Pill (STM32F103C8T6) | Lesson 1 | N/A |
+| ST-Link V2 clone | Lesson 1 | SWD |
+| BME280 module (I2C) | Lesson 4 | I2C1 |
+| SSD1306 OLED 128x64 (I2C) | Lesson 4 | I2C1 |
+| microSD card module | Lesson 5 | SPI1 |
+| microSD card | Lesson 5 | SPI1 |
+| HC-05 Bluetooth module | Lesson 6 | USART2 |
+| 10K potentiometer | Lesson 2 | ADC1 |
+| Relay module (5V, 1-channel) | Lesson 1 | GPIO |
+| Passive buzzer | Lesson 1 | GPIO |
+| Push buttons (x2) | Lesson 1 | GPIO |
+| LEDs (green, yellow, red) | Various | GPIO |
+| 330 ohm resistors (x3) | Various | LED current limiting |
+| 4.7K resistors (x2) | Lesson 4 | I2C pull-ups |
+| Breadboard | Lesson 1 | N/A |
+| Jumper wires | Lesson 1 | N/A |
+
+## System Architecture
+
+<InArticleAd />
+
+### Bus Allocation
+
+The STM32F103C8T6 has limited peripherals, so bus assignment requires planning. The key constraint is that I2C1 is shared between the BME280 and OLED, meaning these two devices must be accessed sequentially (never simultaneously).
+
+| Bus | Devices | Clock Speed | Notes |
+|-----|---------|-------------|-------|
+| I2C1 (PB6 SCL, PB7 SDA) | BME280 (0x76), SSD1306 (0x3C) | 400 kHz | Different addresses, sequential access |
+| SPI1 (PA5 SCK, PA6 MISO, PA7 MOSI) | microSD card (CS = PA4) | 18 MHz max | Single device, dedicated CS |
+| USART2 (PA2 TX, PA3 RX) | HC-05 Bluetooth | 9600 baud | Default HC-05 baud rate |
+| ADC1 (PA0) | Potentiometer | N/A | Single channel, polling |
+
+### Timing Architecture
+
+Different subsystems update at different rates. A simple tick counter in the main loop handles this without needing a real-time OS.
+
+| Task | Interval | Priority |
+|------|----------|----------|
+| Sensor read (BME280 + ADC) | 100 ms | High |
+| Display update (OLED) | 500 ms | Medium |
+| SD card write (CSV) | 1000 ms | Medium |
+| Bluetooth send (JSON) | 2000 ms | Low |
+| Button poll | 10 ms | High |
+| Alarm check | 100 ms | High |
+
+## Complete Wiring Table
+
+| Blue Pill Pin | Connects To | Function |
+|---------------|-------------|----------|
+| PB6 | BME280 SCL, OLED SCL | I2C1 SCL (4.7K pull-up to 3.3V) |
+| PB7 | BME280 SDA, OLED SDA | I2C1 SDA (4.7K pull-up to 3.3V) |
+| PA5 | SD card SCK | SPI1 SCK |
+| PA6 | SD card MISO | SPI1 MISO |
+| PA7 | SD card MOSI | SPI1 MOSI |
+| PA4 | SD card CS | SPI1 NSS (GPIO output) |
+| PA2 | HC-05 RXD | USART2 TX |
+| PA3 | HC-05 TXD | USART2 RX |
+| PA0 | Potentiometer wiper | ADC1 Channel 0 |
+| PB12 | Relay module IN | Alarm relay control |
+| PB13 | Buzzer (+) | Alarm buzzer |
+| PB0 | Button 1 (to GND) | Display page cycle (pull-up) |
+| PB1 | Button 2 (to GND) | Alarm arm/disarm (pull-up) |
+| PB14 | Green LED (through 330R) | Normal status |
+| PB15 | Yellow LED (through 330R) | Warning status |
+| PA8 | Red LED (through 330R) | Alarm active |
+| 3.3V | BME280 VCC, OLED VCC, pot VCC, pull-ups | Power |
+| 5V | SD card VCC, HC-05 VCC, relay VCC | 5V power |
+| GND | All GND connections | Common ground |
+
+:::note[I2C Pull-ups]
+Both the BME280 and OLED share the same I2C bus. Use one pair of 4.7K pull-up resistors on PB6 (SCL) and PB7 (SDA) to 3.3V. Most breakout modules already have pull-ups onboard. If both modules have pull-ups, the effective resistance drops (two 4.7K in parallel = 2.35K), which is still acceptable for 400 kHz I2C. If you see signal integrity issues, remove the pull-ups from one module.
+:::
+
+## CubeMX Configuration
+
+<Steps>
+1. **Create new project** for STM32F103C8T6 in STM32CubeIDE.
+
+2. **Enable I2C1:** Under Connectivity, enable I2C1. Set speed to Fast Mode (400 kHz). SCL = PB6, SDA = PB7.
+
+3. **Enable SPI1:** Under Connectivity, enable SPI1 in Full-Duplex Master mode. Set Prescaler for 4.5 MHz (prescaler = 16 from 72 MHz). Configure PA4 as GPIO Output for chip select.
+
+4. **Enable USART2:** Under Connectivity, enable USART2 in Asynchronous mode. Baud rate = 9600 (HC-05 default).
+
+5. **Enable ADC1:** Under Analog, enable ADC1 Channel 0 (PA0). Continuous mode disabled (we poll manually).
+
+6. **Configure GPIO outputs:** PB12 (relay), PB13 (buzzer), PB14 (green LED), PB15 (yellow LED), PA8 (red LED). All push-pull, no pull-up.
+
+7. **Configure GPIO inputs:** PB0 (button 1), PB1 (button 2). Both with internal pull-up enabled.
+
+8. **Enable IWDG:** Under System Core, enable the Independent Watchdog. Prescaler = 64, Reload = 4095. This gives roughly 4 seconds before reset.
+
+9. **Generate code** and open main.c.
+</Steps>
+
+## Peripheral Initialization Order
+
+The initialization order matters for reliable startup:
+
+```c title="init_order.c"
+/* 1. HAL and clocks first */
+HAL_Init();
+SystemClock_Config();
+
+/* 2. GPIO before anything else (CS pins, relay off, LEDs off) */
+MX_GPIO_Init();
+HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET); /* Relay off */
+HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET); /* Buzzer off */
+
+/* 3. Communication buses */
+MX_I2C1_Init();
+MX_SPI1_Init();
+MX_USART2_UART_Init();
+MX_ADC1_Init();
+
+/* 4. Watchdog last (so init failures don't trigger resets) */
+MX_IWDG_Init();
+```
+
+## Data Structures
+
+<InArticleAd />
+
+```c title="data_types.h"
+#ifndef DATA_TYPES_H
+#define DATA_TYPES_H
+
+#include <stdint.h>
+
+/* Sensor data packet */
+typedef struct {
+    uint32_t timestamp_ms;
+    float temperature;     /* degrees C */
+    float humidity;        /* percent RH */
+    float pressure;        /* hPa */
+    uint16_t pot_raw;      /* 0-4095 */
+    float threshold_temp;  /* derived from pot_raw */
+    uint8_t alarm_active;
+} SensorData;
+
+/* Display page enumeration */
+typedef enum {
+    PAGE_LIVE_DATA = 0,
+    PAGE_MIN_MAX,
+    PAGE_LOG_COUNT,
+    PAGE_SYSTEM_INFO,
+    PAGE_COUNT
+} DisplayPage;
+
+/* System state */
+typedef struct {
+    SensorData current;
+    float temp_min;
+    float temp_max;
+    float hum_min;
+    float hum_max;
+    uint32_t log_count;
+    uint32_t uptime_seconds;
+    DisplayPage current_page;
+    uint8_t alarm_armed;
+    uint8_t alarm_triggered;
+    uint8_t sd_card_ok;
+    uint8_t bme280_ok;
+    uint8_t bt_connected;
+} SystemState;
+
+#endif
+```
+
+## BME280 Driver (I2C)
+
+```c title="bme280.c"
+#define BME280_ADDR (0x76 << 1)  /* HAL uses 8-bit address */
+
+/* Calibration data (read once at startup) */
+static uint16_t dig_T1;
+static int16_t dig_T2, dig_T3;
+static uint16_t dig_H1_u, dig_H3_u;
+static int16_t dig_H2, dig_H4, dig_H5;
+static int8_t dig_H6;
+static uint16_t dig_P1;
+static int16_t dig_P2, dig_P3, dig_P4, dig_P5, dig_P6, dig_P7, dig_P8, dig_P9;
+static int32_t t_fine;
+
+uint8_t BME280_Init(I2C_HandleTypeDef *hi2c)
+{
+    uint8_t chip_id = 0;
+    uint8_t reg = 0xD0;
+
+    if (HAL_I2C_Mem_Read(hi2c, BME280_ADDR, reg, 1, &chip_id, 1, 100) != HAL_OK)
+        return 0;
+    if (chip_id != 0x60) return 0;  /* BME280 chip ID */
+
+    /* Read temperature calibration */
+    uint8_t cal[26];
+    HAL_I2C_Mem_Read(hi2c, BME280_ADDR, 0x88, 1, cal, 26, 100);
+    dig_T1 = (cal[1] << 8) | cal[0];
+    dig_T2 = (cal[3] << 8) | cal[2];
+    dig_T3 = (cal[5] << 8) | cal[4];
+
+    /* Pressure calibration */
+    dig_P1 = (cal[7] << 8) | cal[6];
+    dig_P2 = (cal[9] << 8) | cal[8];
+    dig_P3 = (cal[11] << 8) | cal[10];
+    dig_P4 = (cal[13] << 8) | cal[12];
+    dig_P5 = (cal[15] << 8) | cal[14];
+    dig_P6 = (cal[17] << 8) | cal[16];
+    dig_P7 = (cal[19] << 8) | cal[18];
+    dig_P8 = (cal[21] << 8) | cal[20];
+    dig_P9 = (cal[23] << 8) | cal[22];
+
+    /* Humidity calibration (split across registers) */
+    uint8_t hcal[7];
+    HAL_I2C_Mem_Read(hi2c, BME280_ADDR, 0xA1, 1, &hcal[0], 1, 100);
+    HAL_I2C_Mem_Read(hi2c, BME280_ADDR, 0xE1, 1, &hcal[1], 6, 100);
+    dig_H1_u = hcal[0];
+    dig_H2 = (hcal[2] << 8) | hcal[1];
+    dig_H3_u = hcal[3];
+    dig_H4 = (hcal[4] << 4) | (hcal[5] & 0x0F);
+    dig_H5 = (hcal[6] << 4) | ((hcal[5] >> 4) & 0x0F);
+    dig_H6 = (int8_t)hcal[6];
+
+    /* Configure: humidity oversampling x1 (must be set before ctrl_meas) */
+    uint8_t ctrl_hum = 0x01;
+    HAL_I2C_Mem_Write(hi2c, BME280_ADDR, 0xF2, 1, &ctrl_hum, 1, 100);
+
+    /* Configure: temp x2, pressure x2, normal mode */
+    uint8_t ctrl_meas = 0x4B;  /* osrs_t=010, osrs_p=010, mode=11 */
+    HAL_I2C_Mem_Write(hi2c, BME280_ADDR, 0xF4, 1, &ctrl_meas, 1, 100);
+
+    /* Config: standby 62.5 ms, filter coeff 4 */
+    uint8_t config = 0x28;
+    HAL_I2C_Mem_Write(hi2c, BME280_ADDR, 0xF5, 1, &config, 1, 100);
+
+    return 1;
+}
+
+uint8_t BME280_Read(I2C_HandleTypeDef *hi2c, float *temp, float *hum, float *press)
+{
+    uint8_t data[8];
+    if (HAL_I2C_Mem_Read(hi2c, BME280_ADDR, 0xF7, 1, data, 8, 100) != HAL_OK)
+        return 0;
+
+    /* Raw pressure (20-bit) */
+    int32_t adc_P = ((int32_t)data[0] << 12) | ((int32_t)data[1] << 4) | (data[2] >> 4);
+    /* Raw temperature (20-bit) */
+    int32_t adc_T = ((int32_t)data[3] << 12) | ((int32_t)data[4] << 4) | (data[5] >> 4);
+    /* Raw humidity (16-bit) */
+    int32_t adc_H = ((int32_t)data[6] << 8) | data[7];
+
+    /* Temperature compensation (from BME280 datasheet) */
+    int32_t var1 = ((((adc_T >> 3) - ((int32_t)dig_T1 << 1))) * ((int32_t)dig_T2)) >> 11;
+    int32_t var2 = (((((adc_T >> 4) - ((int32_t)dig_T1)) *
+                      ((adc_T >> 4) - ((int32_t)dig_T1))) >> 12) *
+                    ((int32_t)dig_T3)) >> 14;
+    t_fine = var1 + var2;
+    *temp = (float)((t_fine * 5 + 128) >> 8) / 100.0f;
+
+    /* Pressure compensation */
+    int64_t var1_p = ((int64_t)t_fine) - 128000;
+    int64_t var2_p = var1_p * var1_p * (int64_t)dig_P6;
+    var2_p = var2_p + ((var1_p * (int64_t)dig_P5) << 17);
+    var2_p = var2_p + (((int64_t)dig_P4) << 35);
+    var1_p = ((var1_p * var1_p * (int64_t)dig_P3) >> 8) +
+             ((var1_p * (int64_t)dig_P2) << 12);
+    var1_p = (((((int64_t)1) << 47) + var1_p)) * ((int64_t)dig_P1) >> 33;
+    if (var1_p == 0) { *press = 0; }
+    else {
+        int64_t p = 1048576 - adc_P;
+        p = (((p << 31) - var2_p) * 3125) / var1_p;
+        var1_p = (((int64_t)dig_P9) * (p >> 13) * (p >> 13)) >> 25;
+        var2_p = (((int64_t)dig_P8) * p) >> 19;
+        p = ((p + var1_p + var2_p) >> 8) + (((int64_t)dig_P7) << 4);
+        *press = (float)((uint32_t)p) / 25600.0f;
+    }
+
+    /* Humidity compensation */
+    int32_t v_x1 = (t_fine - ((int32_t)76800));
+    v_x1 = (((((adc_H << 14) - (((int32_t)dig_H4) << 20) -
+               (((int32_t)dig_H5) * v_x1)) + ((int32_t)16384)) >> 15) *
+             (((((((v_x1 * ((int32_t)dig_H6)) >> 10) *
+                  (((v_x1 * ((int32_t)dig_H3_u)) >> 11) + ((int32_t)32768))) >> 10) +
+                ((int32_t)2097152)) * ((int32_t)dig_H2) + 8192) >> 14));
+    v_x1 = (v_x1 - (((((v_x1 >> 15) * (v_x1 >> 15)) >> 7) * ((int32_t)dig_H1_u)) >> 4));
+    v_x1 = (v_x1 < 0) ? 0 : v_x1;
+    v_x1 = (v_x1 > 419430400) ? 419430400 : v_x1;
+    *hum = (float)(v_x1 >> 12) / 1024.0f;
+
+    return 1;
+}
+```
+
+## SSD1306 OLED Driver (I2C)
+
+```c title="ssd1306.c"
+#define SSD1306_ADDR (0x3C << 1)
+#define SSD1306_WIDTH 128
+#define SSD1306_HEIGHT 64
+
+static uint8_t framebuffer[SSD1306_WIDTH * SSD1306_HEIGHT / 8];
+
+uint8_t SSD1306_Init(I2C_HandleTypeDef *hi2c)
+{
+    const uint8_t init_cmds[] = {
+        0xAE, 0xD5, 0x80, 0xA8, 0x3F, 0xD3, 0x00,
+        0x40, 0x8D, 0x14, 0x20, 0x00, 0xA1, 0xC8,
+        0xDA, 0x12, 0x81, 0xCF, 0xD9, 0xF1, 0xDB,
+        0x40, 0xA4, 0xA6, 0xAF
+    };
+
+    for (int i = 0; i < sizeof(init_cmds); i++) {
+        uint8_t buf[2] = {0x00, init_cmds[i]};
+        if (HAL_I2C_Master_Transmit(hi2c, SSD1306_ADDR, buf, 2, 100) != HAL_OK)
+            return 0;
+    }
+
+    memset(framebuffer, 0, sizeof(framebuffer));
+    return 1;
+}
+
+void SSD1306_Clear(void)
+{
+    memset(framebuffer, 0, sizeof(framebuffer));
+}
+
+void SSD1306_SetPixel(uint8_t x, uint8_t y, uint8_t on)
+{
+    if (x >= SSD1306_WIDTH || y >= SSD1306_HEIGHT) return;
+    if (on) framebuffer[x + (y / 8) * SSD1306_WIDTH] |= (1 << (y % 8));
+    else    framebuffer[x + (y / 8) * SSD1306_WIDTH] &= ~(1 << (y % 8));
+}
+
+/* Simple 5x7 font rendering (font table omitted for brevity) */
+extern const uint8_t font5x7[][5];
+
+void SSD1306_WriteString(uint8_t x, uint8_t y, const char *str)
+{
+    while (*str && x < SSD1306_WIDTH - 5) {
+        for (int i = 0; i < 5; i++) {
+            uint8_t col = font5x7[(uint8_t)*str - 32][i];
+            for (int bit = 0; bit < 7; bit++) {
+                SSD1306_SetPixel(x + i, y + bit, (col >> bit) & 1);
+            }
+        }
+        x += 6;
+        str++;
+    }
+}
+
+void SSD1306_Update(I2C_HandleTypeDef *hi2c)
+{
+    for (uint8_t page = 0; page < 8; page++) {
+        uint8_t cmd_buf[3];
+        /* Set page address */
+        cmd_buf[0] = 0x00; cmd_buf[1] = 0xB0 + page;
+        HAL_I2C_Master_Transmit(hi2c, SSD1306_ADDR, cmd_buf, 2, 100);
+        /* Set column start */
+        cmd_buf[1] = 0x00; HAL_I2C_Master_Transmit(hi2c, SSD1306_ADDR, cmd_buf, 2, 100);
+        cmd_buf[1] = 0x10; HAL_I2C_Master_Transmit(hi2c, SSD1306_ADDR, cmd_buf, 2, 100);
+
+        /* Send page data */
+        uint8_t data_buf[SSD1306_WIDTH + 1];
+        data_buf[0] = 0x40;
+        memcpy(&data_buf[1], &framebuffer[page * SSD1306_WIDTH], SSD1306_WIDTH);
+        HAL_I2C_Master_Transmit(hi2c, SSD1306_ADDR, data_buf, SSD1306_WIDTH + 1, 100);
+    }
+}
+```
+
+## SD Card with FatFS (SPI)
+
+<InArticleAd />
+
+```c title="sd_logger.c"
+#include "fatfs.h"
+
+static FIL log_file;
+static uint8_t sd_mounted = 0;
+
+uint8_t SD_Logger_Init(void)
+{
+    FATFS fs;
+    FRESULT res;
+
+    res = f_mount(&fs, "", 1);
+    if (res != FR_OK) return 0;
+
+    /* Open or create log file */
+    res = f_open(&log_file, "datalog.csv", FA_WRITE | FA_OPEN_APPEND);
+    if (res != FR_OK) return 0;
+
+    /* Write CSV header if file is new (size == 0) */
+    if (f_size(&log_file) == 0) {
+        f_printf(&log_file, "time_ms,temp_c,humidity_pct,pressure_hpa,threshold,alarm\n");
+    }
+
+    sd_mounted = 1;
+    return 1;
+}
+
+uint8_t SD_Logger_Write(SensorData *data)
+{
+    if (!sd_mounted) return 0;
+
+    FRESULT res;
+    char line[128];
+    int len = snprintf(line, sizeof(line),
+        "%lu,%.1f,%.1f,%.1f,%.1f,%u\n",
+        data->timestamp_ms,
+        data->temperature,
+        data->humidity,
+        data->pressure,
+        data->threshold_temp,
+        data->alarm_active);
+
+    UINT bw;
+    res = f_write(&log_file, line, len, &bw);
+    if (res != FR_OK) return 0;
+
+    f_sync(&log_file);  /* Flush to card */
+    return 1;
+}
+
+uint8_t SD_Logger_Check(void)
+{
+    /* Attempt to detect card removal by trying a read */
+    FILINFO fno;
+    if (f_stat("datalog.csv", &fno) != FR_OK) {
+        sd_mounted = 0;
+        /* Try to remount */
+        if (SD_Logger_Init()) {
+            sd_mounted = 1;
+        }
+    }
+    return sd_mounted;
+}
+```
+
+:::note[FatFS in CubeMX]
+Enable FATFS under Middleware in CubeMX. Set the SD interface to SPI and select SPI1. CubeMX generates the diskio driver stubs. You need to implement `disk_initialize`, `disk_read`, `disk_write`, and `disk_ioctl` for SPI SD card access. Many tutorials and HAL examples provide complete SPI SD card diskio implementations that work with the Blue Pill.
+:::
+
+## Bluetooth Streaming (UART)
+
+```c title="bluetooth.c"
+#include <stdio.h>
+#include <string.h>
+
+/* Send JSON data over USART2 to HC-05 */
+uint8_t BT_SendJSON(UART_HandleTypeDef *huart, SensorData *data)
+{
+    char json[200];
+    int len = snprintf(json, sizeof(json),
+        "{\"t\":%.1f,\"h\":%.1f,\"p\":%.1f,\"thr\":%.1f,\"alarm\":%u,\"ms\":%lu}\r\n",
+        data->temperature,
+        data->humidity,
+        data->pressure,
+        data->threshold_temp,
+        data->alarm_active,
+        data->timestamp_ms);
+
+    if (HAL_UART_Transmit(huart, (uint8_t *)json, len, 200) != HAL_OK)
+        return 0;
+
+    return 1;
+}
+```
+
+## Display Pages (State Machine)
+
+```c title="display.c"
+void Display_LiveData(SystemState *state)
+{
+    char buf[24];
+    SSD1306_Clear();
+
+    snprintf(buf, sizeof(buf), "T: %.1f C", state->current.temperature);
+    SSD1306_WriteString(0, 0, buf);
+
+    snprintf(buf, sizeof(buf), "H: %.1f %%", state->current.humidity);
+    SSD1306_WriteString(0, 10, buf);
+
+    snprintf(buf, sizeof(buf), "P: %.0f hPa", state->current.pressure);
+    SSD1306_WriteString(0, 20, buf);
+
+    snprintf(buf, sizeof(buf), "Thr: %.1f C", state->current.threshold_temp);
+    SSD1306_WriteString(0, 30, buf);
+
+    if (state->alarm_triggered) {
+        SSD1306_WriteString(0, 45, "** ALARM **");
+    } else if (state->alarm_armed) {
+        SSD1306_WriteString(0, 45, "Armed");
+    } else {
+        SSD1306_WriteString(0, 45, "Disarmed");
+    }
+}
+
+void Display_MinMax(SystemState *state)
+{
+    char buf[24];
+    SSD1306_Clear();
+
+    SSD1306_WriteString(0, 0, "Min / Max");
+
+    snprintf(buf, sizeof(buf), "T: %.1f / %.1f", state->temp_min, state->temp_max);
+    SSD1306_WriteString(0, 14, buf);
+
+    snprintf(buf, sizeof(buf), "H: %.1f / %.1f", state->hum_min, state->hum_max);
+    SSD1306_WriteString(0, 28, buf);
+}
+
+void Display_LogCount(SystemState *state)
+{
+    char buf[24];
+    SSD1306_Clear();
+
+    SSD1306_WriteString(0, 0, "SD Card Log");
+
+    snprintf(buf, sizeof(buf), "Entries: %lu", state->log_count);
+    SSD1306_WriteString(0, 14, buf);
+
+    snprintf(buf, sizeof(buf), "SD: %s", state->sd_card_ok ? "OK" : "FAIL");
+    SSD1306_WriteString(0, 28, buf);
+}
+
+void Display_SystemInfo(SystemState *state)
+{
+    char buf[24];
+    SSD1306_Clear();
+
+    SSD1306_WriteString(0, 0, "System Info");
+
+    snprintf(buf, sizeof(buf), "Up: %lus", state->uptime_seconds);
+    SSD1306_WriteString(0, 14, buf);
+
+    snprintf(buf, sizeof(buf), "BME: %s", state->bme280_ok ? "OK" : "FAIL");
+    SSD1306_WriteString(0, 28, buf);
+
+    snprintf(buf, sizeof(buf), "BT: %s", state->bt_connected ? "ON" : "OFF");
+    SSD1306_WriteString(0, 42, buf);
+}
+
+void Display_Update(I2C_HandleTypeDef *hi2c, SystemState *state)
+{
+    switch (state->current_page) {
+        case PAGE_LIVE_DATA:   Display_LiveData(state);   break;
+        case PAGE_MIN_MAX:     Display_MinMax(state);     break;
+        case PAGE_LOG_COUNT:   Display_LogCount(state);   break;
+        case PAGE_SYSTEM_INFO: Display_SystemInfo(state); break;
+        default: break;
+    }
+    SSD1306_Update(hi2c);
+}
+```
+
+## Alarm Logic
+
+```c title="alarm.c"
+static uint32_t buzzer_tick = 0;
+static uint8_t buzzer_state = 0;
+
+void Alarm_Check(SystemState *state)
+{
+    if (!state->alarm_armed) {
+        state->alarm_triggered = 0;
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET); /* Relay off */
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET); /* Buzzer off */
+        return;
+    }
+
+    float margin = state->current.threshold_temp - state->current.temperature;
+
+    if (state->current.temperature > state->current.threshold_temp) {
+        /* Alarm triggered */
+        state->alarm_triggered = 1;
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET); /* Relay on */
+
+        /* Buzzer pattern: beep-beep-pause (200ms on, 100ms off, 200ms on, 500ms off) */
+        buzzer_tick++;
+        if (buzzer_tick < 2)       buzzer_state = 1;       /* First beep */
+        else if (buzzer_tick < 3)  buzzer_state = 0;       /* Gap */
+        else if (buzzer_tick < 5)  buzzer_state = 1;       /* Second beep */
+        else if (buzzer_tick < 10) buzzer_state = 0;       /* Pause */
+        else buzzer_tick = 0;
+
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13,
+            buzzer_state ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    } else {
+        state->alarm_triggered = 0;
+        buzzer_tick = 0;
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET);
+    }
+
+    /* Status LEDs */
+    if (state->alarm_triggered) {
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET); /* Green off */
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_RESET); /* Yellow off */
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET);    /* Red on */
+    } else if (margin < 5.0f && margin > 0) {
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_SET);   /* Yellow on */
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
+    } else {
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);   /* Green on */
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
+    }
+}
+```
+
+## Complete main.c
+
+<InArticleAd />
+
+```c title="main.c"
+#include "main.h"
+#include "fatfs.h"
+#include "data_types.h"
+#include <stdio.h>
+#include <string.h>
+
+/* Peripheral handles (generated by CubeMX) */
+extern I2C_HandleTypeDef hi2c1;
+extern SPI_HandleTypeDef hspi1;
+extern UART_HandleTypeDef huart2;
+extern ADC_HandleTypeDef hadc1;
+extern IWDG_HandleTypeDef hiwdg;
+
+/* System state */
+SystemState sys = {0};
+
+/* Timing counters (milliseconds) */
+uint32_t tick_sensor = 0;
+uint32_t tick_display = 0;
+uint32_t tick_sd = 0;
+uint32_t tick_bt = 0;
+uint32_t tick_second = 0;
+
+/* Button debounce */
+uint8_t btn1_prev = 1, btn2_prev = 1;
+uint8_t btn1_count = 0, btn2_count = 0;
+
+/* Forward declarations */
+extern uint8_t BME280_Init(I2C_HandleTypeDef *hi2c);
+extern uint8_t BME280_Read(I2C_HandleTypeDef *hi2c, float *t, float *h, float *p);
+extern uint8_t SSD1306_Init(I2C_HandleTypeDef *hi2c);
+extern void Display_Update(I2C_HandleTypeDef *hi2c, SystemState *state);
+extern uint8_t SD_Logger_Init(void);
+extern uint8_t SD_Logger_Write(SensorData *data);
+extern uint8_t SD_Logger_Check(void);
+extern uint8_t BT_SendJSON(UART_HandleTypeDef *huart, SensorData *data);
+extern void Alarm_Check(SystemState *state);
+
+/* Read potentiometer and convert to threshold temperature */
+float ReadThreshold(void)
+{
+    HAL_ADC_Start(&hadc1);
+    HAL_ADC_PollForConversion(&hadc1, 10);
+    uint16_t raw = HAL_ADC_GetValue(&hadc1);
+    HAL_ADC_Stop(&hadc1);
+
+    sys.current.pot_raw = raw;
+
+    /* Map 0-4095 to 15.0-50.0 degrees C */
+    return 15.0f + ((float)raw / 4095.0f) * 35.0f;
+}
+
+/* Debounced button read */
+void PollButtons(void)
+{
+    uint8_t b1 = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0);
+    uint8_t b2 = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_1);
+
+    /* Button 1: cycle display page */
+    if (btn1_prev == 1 && b1 == 0) {
+        btn1_count++;
+        if (btn1_count > 3) {  /* ~30 ms debounce */
+            sys.current_page = (DisplayPage)((sys.current_page + 1) % PAGE_COUNT);
+            btn1_count = 0;
+        }
+    } else {
+        btn1_count = 0;
+    }
+    btn1_prev = b1;
+
+    /* Button 2: arm/disarm alarm */
+    if (btn2_prev == 1 && b2 == 0) {
+        btn2_count++;
+        if (btn2_count > 3) {
+            sys.alarm_armed = !sys.alarm_armed;
+            btn2_count = 0;
+        }
+    } else {
+        btn2_count = 0;
+    }
+    btn2_prev = b2;
+}
+
+int main(void)
+{
+    HAL_Init();
+    SystemClock_Config();
+    MX_GPIO_Init();
+    MX_I2C1_Init();
+    MX_SPI1_Init();
+    MX_USART2_UART_Init();
+    MX_ADC1_Init();
+    MX_FATFS_Init();
+
+    /* Initialize relay and buzzer off */
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET);
+
+    /* Green LED on during init */
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
+
+    /* Initialize BME280 */
+    sys.bme280_ok = BME280_Init(&hi2c1);
+
+    /* Initialize OLED */
+    SSD1306_Init(&hi2c1);
+
+    /* Initialize SD card */
+    sys.sd_card_ok = SD_Logger_Init();
+
+    /* Initialize min/max with first reading */
+    if (sys.bme280_ok) {
+        BME280_Read(&hi2c1,
+            &sys.current.temperature,
+            &sys.current.humidity,
+            &sys.current.pressure);
+        sys.temp_min = sys.temp_max = sys.current.temperature;
+        sys.hum_min = sys.hum_max = sys.current.humidity;
+    }
+
+    sys.alarm_armed = 1;  /* Armed by default */
+    sys.bt_connected = 1; /* Assume connected */
+    sys.log_count = 0;
+
+    /* Start watchdog */
+    MX_IWDG_Init();
+
+    while (1) {
+        uint32_t now = HAL_GetTick();
+
+        /* Feed watchdog */
+        HAL_IWDG_Refresh(&hiwdg);
+
+        /* Poll buttons every ~10 ms */
+        PollButtons();
+
+        /* Sensor read every 100 ms */
+        if (now - tick_sensor >= 100) {
+            tick_sensor = now;
+            sys.current.timestamp_ms = now;
+
+            /* Read BME280 with retry on failure */
+            if (sys.bme280_ok) {
+                if (!BME280_Read(&hi2c1,
+                    &sys.current.temperature,
+                    &sys.current.humidity,
+                    &sys.current.pressure)) {
+                    sys.bme280_ok = 0;
+                    /* Attempt reinit */
+                    sys.bme280_ok = BME280_Init(&hi2c1);
+                }
+            }
+
+            /* Read potentiometer threshold */
+            sys.current.threshold_temp = ReadThreshold();
+
+            /* Update min/max */
+            if (sys.current.temperature < sys.temp_min) sys.temp_min = sys.current.temperature;
+            if (sys.current.temperature > sys.temp_max) sys.temp_max = sys.current.temperature;
+            if (sys.current.humidity < sys.hum_min) sys.hum_min = sys.current.humidity;
+            if (sys.current.humidity > sys.hum_max) sys.hum_max = sys.current.humidity;
+
+            /* Check alarm */
+            sys.current.alarm_active = sys.alarm_triggered;
+            Alarm_Check(&sys);
+        }
+
+        /* Display update every 500 ms */
+        if (now - tick_display >= 500) {
+            tick_display = now;
+            Display_Update(&hi2c1, &sys);
+        }
+
+        /* SD card write every 1 second */
+        if (now - tick_sd >= 1000) {
+            tick_sd = now;
+            if (sys.sd_card_ok) {
+                if (SD_Logger_Write(&sys.current)) {
+                    sys.log_count++;
+                } else {
+                    sys.sd_card_ok = SD_Logger_Check();
+                }
+            } else {
+                sys.sd_card_ok = SD_Logger_Check();
+            }
+        }
+
+        /* Bluetooth send every 2 seconds */
+        if (now - tick_bt >= 2000) {
+            tick_bt = now;
+            if (BT_SendJSON(&huart2, &sys.current) != 1) {
+                sys.bt_connected = 0;
+            } else {
+                sys.bt_connected = 1;
+            }
+        }
+
+        /* Uptime counter */
+        if (now - tick_second >= 1000) {
+            tick_second = now;
+            sys.uptime_seconds++;
+        }
+
+        HAL_Delay(10);
+    }
+}
+```
+
+## Project File Structure
+
+<FileTree>
+- MultiSensorLogger/
+  - Core/
+    - Inc/
+      - main.h
+      - data_types.h
+      - stm32f1xx_hal_conf.h
+      - stm32f1xx_it.h
+    - Src/
+      - main.c
+      - bme280.c
+      - ssd1306.c
+      - sd_logger.c
+      - bluetooth.c
+      - display.c
+      - alarm.c
+      - font5x7.c
+      - system_stm32f1xx.c
+      - stm32f1xx_it.c
+      - stm32f1xx_hal_msp.c
+  - FATFS/
+    - App/
+      - fatfs.c
+    - Target/
+      - user_diskio.c
+  - Drivers/
+    - CMSIS/
+    - STM32F1xx_HAL_Driver/
+  - MultiSensorLogger.ioc
+</FileTree>
+
+## Testing
+
+<Steps>
+1. **Flash the firmware** using ST-Link and STM32CubeIDE.
+
+2. **Check the OLED** first. It should display temperature, humidity, and pressure readings on the live data page. If the display is blank, check I2C wiring and pull-ups.
+
+3. **Verify the potentiometer.** Turn it fully clockwise and counterclockwise. The threshold value on the OLED should move between 15.0 and 50.0 degrees C.
+
+4. **Test the SD card.** Remove the card, insert it into a computer, and check for datalog.csv. The file should contain CSV rows with timestamped sensor readings.
+
+5. **Pair the HC-05** with your phone or computer. Open a Bluetooth serial terminal. You should see JSON lines arriving every 2 seconds.
+
+6. **Trigger the alarm.** Set the potentiometer so the threshold is below the current room temperature. The relay should click, the buzzer should sound a beep-beep-pause pattern, and the red LED should light up.
+
+7. **Test button functions.** Press button 1 to cycle through display pages (live data, min/max, log count, system info). Press button 2 to arm and disarm the alarm.
+
+8. **Test error recovery.** Pull the SD card while running. The system should continue operating, and the system info page should show "SD: FAIL". Reinsert the card and the logger should resume.
+</Steps>
+
+## Power Considerations
+
+<InArticleAd />
+
+| Peripheral | Active Current | Notes |
+|------------|---------------|-------|
+| STM32F103 (72 MHz) | ~30 mA | Dominant consumer |
+| BME280 | ~0.3 mA | Very low; 1 uA in sleep |
+| SSD1306 OLED | ~10 mA | Depends on pixels lit |
+| SD card (write) | ~50 mA peak | Significant spikes during write |
+| HC-05 | ~30 mA | ~8 mA in connected idle |
+| Relay module | ~70 mA | Coil current when active |
+| Total (worst case) | ~190 mA | Exceeds USB 100 mA; use external supply |
+
+For battery operation, consider powering down peripherals when idle. The BME280 can be put into sleep mode between readings. The OLED can be turned off with command 0xAE. The HC-05 can enter low-power mode via AT commands. The STM32 itself supports Stop mode with wake-on-interrupt from a timer, consuming under 20 uA.
+
+## Production Notes
+
+<Card title="From Breadboard to Product" icon="setting">
+**PCB layout:** Place decoupling capacitors (100 nF ceramic) within 5 mm of every IC power pin. Route I2C traces as short differential pairs. Keep the SD card traces short and away from noisy PWM signals. Use a ground pour on the bottom layer.
+
+**Power budgeting:** The total system draws up to 190 mA under worst case. A USB power source provides 500 mA, which is sufficient. For battery operation with a LiPo cell, add a 3.3V LDO regulator rated for 300 mA or more. Budget for the relay coil current, which dominates during alarm state.
+
+**Enclosure design:** The OLED and buttons need panel cutouts. The BME280 should be exposed to ambient air (not sealed inside). Route the SD card slot to be accessible. Include ventilation holes near the sensor to avoid heat buildup from the voltage regulator affecting temperature readings.
+
+**Field testing:** Deploy the logger for 24 hours and verify the SD card data covers the full period without gaps. Check that the watchdog never triggers (which would appear as a gap in timestamps). Monitor Bluetooth range: the HC-05 typically reaches 10 meters indoors.
+
+**Reliability:** Add a startup self-test that checks each peripheral (BME280 chip ID, OLED ACK, SD card mount, UART echo) and reports failures on the OLED before entering the main loop. In production firmware, store a failure log in the STM32's backup registers so you can diagnose field failures.
+</Card>
+
+## Course Summary
+
+This course covered ten lessons progressing from basic GPIO interfacing to a complete multi-sensor integrated system:
+
+| Lesson | Topic | Key Skills |
+|--------|-------|------------|
+| 1 | GPIO and Digital Interfacing | CubeIDE setup, HAL GPIO, interrupts, relay and ultrasonic control |
+| 2 | ADC and Analog Signal Conditioning | 12-bit ADC, signal conditioning, voltage dividers, op-amp buffers |
+| 3 | PWM, Timers, and Motor Control | Timer PWM generation, servo control, DC motor H-bridge, input capture |
+| 4 | I2C: Sensors and Displays | I2C protocol, BME280, SSD1306 OLED, EEPROM, bus scanning |
+| 5 | SPI: Storage and Displays | SPI protocol, ST7735 TFT, SD card with FatFS, chip select management |
+| 6 | UART: GPS, Bluetooth, RS-485 | NMEA parsing, HC-05 Bluetooth, RS-485 differential, DMA UART |
+| 7 | RFID, NFC, and Identification | RC522 SPI driver, MIFARE read/write, access control state machine |
+| 8 | Stepper Motors and Encoders | A4988 driver, acceleration profiles, encoder mode, closed-loop homing |
+| 9 | DMA, Interrupts, and CAN Bus | DMA architecture, NVIC priorities, bxCAN, two-node CAN network |
+| 10 | Capstone: Multi-Sensor Data Logger | Bus sharing, timing architecture, state machine UI, system integration |
+
+## Where to Go Next
+
+<CardGrid>
+  <Card title="IoT Systems" icon="star">
+    The [IoT Systems](/education/iot-systems/) course takes these sensor nodes online. Connect your STM32 or ESP32 to MQTT brokers, build cloud dashboards, and implement over-the-air firmware updates. The data logger you built here becomes the edge device in a full IoT architecture.
+  </Card>
+
+  <Card title="Edge AI / TinyML" icon="rocket">
+    The [Edge AI and TinyML](/education/edge-ai-tinyml/) course adds machine learning inference directly on microcontrollers. Run anomaly detection on sensor data, classify audio with neural networks, and deploy TensorFlow Lite models on Cortex-M devices. The sensor interfacing skills from this course provide the data acquisition foundation that every TinyML application needs.
+  </Card>
+</CardGrid>
+
+<Copyright />
+<SensorActuatorInterfacingStm32Comments />
+<TawkWidget />

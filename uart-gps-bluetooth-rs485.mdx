@@ -1,0 +1,634 @@
+---
+title: "UART Devices: GPS, Bluetooth, and RS-485"
+description: "Parse GPS coordinates from NMEA sentences, relay position data over Bluetooth to a phone, and communicate over long distances with RS-485. Use DMA with idle line detection for robust UART reception on the STM32 Blue Pill"
+contributors: "sam-macharia,lawrence-langat"
+pubDate: 2026-03-06
+tags: ["stm32", "uart", "gps", "bluetooth", "rs-485", "nmea", "dma", "cubemx", "hc-05", "neo-6m"]
+excerpt: "Connect a NEO-6M GPS module, HC-05 Bluetooth module, and MAX485 RS-485 transceivers to the STM32 Blue Pill. Parse NMEA sentences with DMA-based reception, send position data to a phone over Bluetooth, and forward coordinates over RS-485 for long-distance communication."
+heroImage: "https://cdn.siliconwit.com/education/sensor-actuator-interfacing-stm32/uart-gps-bluetooth-rs485.png"
+---
+
+import TawkWidget from '../../../../components/TawkWidget.astro';
+import UniversalContentContributors from '../../../../components/UniversalContentContributors.astro';
+import InArticleAd from '../../../../components/InArticleAd.astro';
+import Copyright from '../../../../components/Copyright.astro';
+import TailwindWrapper from '../../../../components/TailwindWrapper.jsx';
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import { Card, CardGrid, Badge, Steps, LinkButton, FileTree } from '@astrojs/starlight/components';
+import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
+
+<UniversalContentContributors
+  contributors={frontmatter.contributors}
+/>
+
+UART is the simplest serial protocol, but the devices that speak it are some of the most interesting: GPS receivers that decode satellite signals into latitude and longitude, Bluetooth modules that turn a wire into a wireless link, and RS-485 transceivers that push serial data hundreds of meters over twisted pair. This lesson connects all three to the Blue Pill, each on its own USART peripheral, and builds a GPS tracker that relays coordinates to your phone and to a remote display node. #STM32 #UART #GPS
+
+## What We Are Building
+
+<Card title="GPS Tracker with Bluetooth Phone Relay" icon="star">
+A position tracker that reads GPS coordinates from a NEO-6M module, formats them into readable strings, and sends them to a phone over Bluetooth for live map display. Simultaneously, the same position data is forwarded over RS-485 to a remote node that could be hundreds of meters away. An LED blinks on each GPS fix and stays steady when there is no satellite lock.
+</Card>
+
+**Project specifications:**
+
+| Parameter | Value |
+|-----------|-------|
+| Board | Blue Pill (STM32F103C8T6) |
+| GPS | NEO-6M on USART1 (9600 baud) |
+| Bluetooth | HC-05 on USART2 (9600 baud) |
+| RS-485 | MAX485 on USART3 (9600 baud) |
+| GPS update rate | 1 Hz (default NEO-6M rate) |
+| Data relay interval | Every 2 seconds |
+| DMA | Circular buffer on USART1 RX with idle line detection |
+
+### Bill of Materials
+
+| Component | Quantity | Notes |
+|-----------|----------|-------|
+| Blue Pill (STM32F103C8T6) | 1 | From previous lessons |
+| ST-Link V2 clone | 1 | From previous lessons |
+| NEO-6M GPS module | 1 | Comes with ceramic patch antenna |
+| HC-05 Bluetooth module | 1 | SPP (Serial Port Profile) module |
+| MAX485 module | 2 | One for each end of the RS-485 link |
+| 120 ohm resistor | 2 | RS-485 line termination |
+| LED + 330 ohm resistor | 1 | GPS fix indicator |
+| Breadboard + jumper wires | 1 set | From previous lessons |
+
+## UART Protocol Review
+
+<InArticleAd />
+
+UART (Universal Asynchronous Receiver/Transmitter) sends data as a series of frames. Each frame contains a start bit (always low), 8 data bits (LSB first), an optional parity bit, and one or two stop bits (always high). The baud rate defines the bit duration: at 9600 baud, each bit lasts approximately 104 microseconds.
+
+| Parameter | Common Values |
+|-----------|--------------|
+| Baud rate | 9600, 19200, 38400, 57600, 115200 |
+| Data bits | 8 (standard) |
+| Parity | None, Even, or Odd |
+| Stop bits | 1 or 2 |
+| Flow control | None, Hardware (RTS/CTS), Software (XON/XOFF) |
+
+**Hardware flow control** uses two additional lines: RTS (Request To Send) and CTS (Clear To Send). The receiver de-asserts CTS when its buffer is full, and the transmitter pauses. This prevents data loss at high speeds or when the receiver is busy.
+
+**Software flow control** sends special characters (XON = 0x11, XOFF = 0x13) inline with data to signal the sender to pause or resume. This works without extra wires but cannot be used with binary data that might contain those byte values.
+
+For this project, all three UART links run at 9600 baud with no parity, 8 data bits, 1 stop bit, and no flow control. The NEO-6M and HC-05 both default to these settings.
+
+## Wiring
+
+| STM32 Pin | Function | Connected To |
+|-----------|----------|-------------|
+| PA9 | USART1_TX | NEO-6M RX |
+| PA10 | USART1_RX | NEO-6M TX |
+| PA2 | USART2_TX | HC-05 RX |
+| PA3 | USART2_RX | HC-05 TX |
+| PB10 | USART3_TX | MAX485 DI |
+| PB11 | USART3_RX | MAX485 RO |
+| PB1 | GPIO Output | MAX485 DE + RE (tied together) |
+| PC13 | GPIO Output | GPS fix LED (onboard, active low) |
+| 3.3V | Power | NEO-6M VCC, HC-05 VCC |
+| 5V | Power | MAX485 VCC (if 5V module) |
+| GND | Ground | All modules GND |
+
+### RS-485 MAX485 Wiring Detail
+
+| MAX485 Pin | Connection |
+|-----------|-----------|
+| DI | PB10 (USART3_TX) |
+| RO | PB11 (USART3_RX) |
+| DE | PB1 (direction GPIO) |
+| RE | PB1 (tied to DE, active low for receive) |
+| A | Twisted pair wire A (to remote MAX485 A) |
+| B | Twisted pair wire B (to remote MAX485 B) |
+| VCC | 5V (or 3.3V for 3.3V modules) |
+| GND | Common ground |
+
+The DE (Driver Enable) and RE (Receiver Enable, active low) pins are tied together. When the GPIO is high, the module transmits. When low, it receives. This is half-duplex: you cannot transmit and receive simultaneously on the same MAX485.
+
+:::caution[HC-05 voltage levels]
+The HC-05 operates at 3.3V logic but is often mounted on a carrier board with a 5V regulator. Check your module: if the TX pin outputs 3.3V levels, connect it directly to PA3. If it outputs 5V (rare but possible), use a voltage divider (1K + 2K) on the HC-05 TX to STM32 RX line. The STM32 TX at 3.3V is sufficient to drive the HC-05 RX pin.
+:::
+
+## CubeMX Configuration
+
+<Steps>
+1. **Create a new project** for STM32F103C8Tx. Set debug to Serial Wire.
+
+2. **Configure USART1** (GPS). Mode: Asynchronous. Baud Rate: 9600, Word Length: 8, Stop Bits: 1, Parity: None. Enable DMA for USART1_RX: Mode = Circular, Data Width = Byte. Under NVIC, enable USART1 global interrupt (needed for idle line detection).
+
+3. **Configure USART2** (Bluetooth). Mode: Asynchronous. Same parameters as USART1 (9600, 8N1). No DMA needed; we transmit only.
+
+4. **Configure USART3** (RS-485). Mode: Asynchronous. Same parameters (9600, 8N1). No DMA needed for this simple half-duplex use.
+
+5. **Configure GPIO.** Set PB1 as GPIO_Output (RS-485 direction), initial state Low (receive mode). Set PC13 as GPIO_Output (LED).
+
+6. **DMA settings.** In the DMA tab for USART1_RX, select DMA1 Channel 5, Direction: Peripheral to Memory, Mode: Circular, Increment: Memory only, Data Width: Byte.
+
+7. **Generate code** and open main.c.
+</Steps>
+
+## DMA-Based UART Reception
+
+Polling UART byte by byte is unreliable for GPS data. The NEO-6M sends bursts of NMEA sentences (often 400+ bytes) once per second, and if the CPU is busy when bytes arrive, they are lost. DMA with idle line detection solves this completely: DMA writes incoming bytes to a circular buffer without CPU intervention, and the idle line interrupt fires when the GPS pauses between sentences, telling you that a complete batch of data is ready.
+
+### Circular DMA Buffer Setup
+
+```c title="main.c"
+/* Private defines */
+#define GPS_BUF_SIZE  512
+#define BT_TX_SIZE    128
+#define RS485_TX_SIZE 128
+
+/* Private variables */
+uint8_t gps_dma_buf[GPS_BUF_SIZE];
+volatile uint16_t gps_dma_head = 0;    /* Last processed position */
+volatile uint8_t  gps_data_ready = 0;
+
+char nmea_line[128];         /* Single NMEA sentence buffer */
+uint16_t nmea_pos = 0;
+
+char bt_tx_buf[BT_TX_SIZE];
+char rs485_tx_buf[RS485_TX_SIZE];
+
+/* Start DMA reception (call once after init) */
+void gps_start_dma(void) {
+    __HAL_UART_ENABLE_IT(&huart1, UART_IT_IDLE);
+    HAL_UART_Receive_DMA(&huart1, gps_dma_buf, GPS_BUF_SIZE);
+}
+```
+
+### Idle Line Interrupt Handler
+
+The idle line interrupt fires when the UART RX line has been idle for one frame duration (about 1 ms at 9600 baud). This indicates the GPS module has finished sending its current batch of sentences.
+
+```c title="main.c"
+/* Add to USART1_IRQHandler in stm32f1xx_it.c, or use callback */
+void HAL_UART_IdleCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart->Instance == USART1) {
+        gps_data_ready = 1;
+    }
+}
+
+/* Override the IRQ handler to catch the idle flag */
+void USART1_IRQHandler(void) {
+    if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_IDLE)) {
+        __HAL_UART_CLEAR_IDLEFLAG(&huart1);
+        gps_data_ready = 1;
+    }
+    HAL_UART_IRQHandler(&huart1);
+}
+```
+
+### Processing the DMA Buffer
+
+The circular DMA buffer wraps around automatically. We track how far we have read (head) versus how far DMA has written (tail):
+
+```c title="main.c"
+uint16_t gps_process_buffer(void) {
+    uint16_t tail = GPS_BUF_SIZE - __HAL_DMA_GET_COUNTER(huart1.hdmarx);
+    uint16_t count = 0;
+
+    while (gps_dma_head != tail) {
+        uint8_t ch = gps_dma_buf[gps_dma_head];
+        gps_dma_head = (gps_dma_head + 1) % GPS_BUF_SIZE;
+
+        if (ch == '\n') {
+            nmea_line[nmea_pos] = '\0';
+            nmea_pos = 0;
+            count++;
+            /* Process the completed NMEA sentence */
+            if (strncmp(nmea_line, "$GPRMC", 6) == 0 ||
+                strncmp(nmea_line, "$GNRMC", 6) == 0) {
+                parse_rmc(nmea_line);
+            } else if (strncmp(nmea_line, "$GPGGA", 6) == 0 ||
+                       strncmp(nmea_line, "$GNGGA", 6) == 0) {
+                parse_gga(nmea_line);
+            }
+        } else if (ch != '\r' && nmea_pos < sizeof(nmea_line) - 1) {
+            nmea_line[nmea_pos++] = ch;
+        }
+    }
+    return count;
+}
+```
+
+## NEO-6M GPS: NMEA Parsing
+
+<InArticleAd />
+
+The NEO-6M outputs NMEA 0183 sentences as ASCII text. Each sentence starts with a dollar sign character, a talker/sentence ID, comma-separated fields, an asterisk, and a two-character hex checksum. The two most useful sentences are:
+
+**GPRMC (Recommended Minimum):** Time, fix status, latitude, longitude, speed, course, date.
+
+```
+$GPRMC,123519.00,A,4807.038,N,01131.000,E,022.4,084.4,230326,003.1,W*6A
+```
+
+**GPGGA (Fix Information):** Time, position, fix quality, satellite count, HDOP, altitude.
+
+```
+$GPGGA,123519.00,4807.038,N,01131.000,E,1,08,0.9,545.4,M,47.0,M,,*47
+```
+
+### GPS Data Structure and Parser
+
+```c title="main.c"
+typedef struct {
+    /* From RMC */
+    uint8_t  fix_valid;       /* 'A' = valid, 'V' = void */
+    float    latitude;        /* Decimal degrees (positive = N) */
+    float    longitude;       /* Decimal degrees (positive = E) */
+    float    speed_knots;
+    float    course_deg;
+    uint8_t  hour, minute, second;
+    uint8_t  day, month, year;
+    /* From GGA */
+    uint8_t  fix_quality;     /* 0=none, 1=GPS, 2=DGPS */
+    uint8_t  satellites;
+} gps_data_t;
+
+gps_data_t gps;
+
+/* Extract the nth comma-separated field from an NMEA sentence */
+static char* nmea_field(char *sentence, int index) {
+    static char field[20];
+    int current = 0;
+    char *p = sentence;
+
+    while (*p && current < index) {
+        if (*p == ',') current++;
+        p++;
+    }
+
+    int i = 0;
+    while (*p && *p != ',' && *p != '*' && i < 19) {
+        field[i++] = *p++;
+    }
+    field[i] = '\0';
+    return field;
+}
+
+/* Convert NMEA coordinate (DDDMM.MMMM) to decimal degrees */
+static float nmea_to_degrees(const char *coord, const char *dir) {
+    if (coord[0] == '\0') return 0.0f;
+    float raw = atof(coord);
+    int degrees = (int)(raw / 100);
+    float minutes = raw - (degrees * 100);
+    float result = degrees + (minutes / 60.0f);
+    if (dir[0] == 'S' || dir[0] == 'W') result = -result;
+    return result;
+}
+
+void parse_rmc(char *sentence) {
+    char *time_str = nmea_field(sentence, 1);
+    char *status   = nmea_field(sentence, 2);
+    char *lat      = nmea_field(sentence, 3);
+    char *lat_dir  = nmea_field(sentence, 4);
+    char *lon      = nmea_field(sentence, 5);
+    char *lon_dir  = nmea_field(sentence, 6);
+    char *spd      = nmea_field(sentence, 7);
+    char *crs      = nmea_field(sentence, 8);
+    char *date_str = nmea_field(sentence, 9);
+
+    gps.fix_valid = (status[0] == 'A') ? 1 : 0;
+
+    if (strlen(time_str) >= 6) {
+        gps.hour   = (time_str[0] - '0') * 10 + (time_str[1] - '0');
+        gps.minute = (time_str[2] - '0') * 10 + (time_str[3] - '0');
+        gps.second = (time_str[4] - '0') * 10 + (time_str[5] - '0');
+    }
+
+    if (strlen(date_str) >= 6) {
+        gps.day   = (date_str[0] - '0') * 10 + (date_str[1] - '0');
+        gps.month = (date_str[2] - '0') * 10 + (date_str[3] - '0');
+        gps.year  = (date_str[4] - '0') * 10 + (date_str[5] - '0');
+    }
+
+    if (gps.fix_valid) {
+        /* nmea_field uses a static buffer, so copy fields before calling again */
+        char lat_buf[20], lat_d[4], lon_buf[20], lon_d[4];
+        strncpy(lat_buf, nmea_field(sentence, 3), 19);
+        strncpy(lat_d,   nmea_field(sentence, 4), 3);
+        strncpy(lon_buf, nmea_field(sentence, 5), 19);
+        strncpy(lon_d,   nmea_field(sentence, 6), 3);
+
+        gps.latitude    = nmea_to_degrees(lat_buf, lat_d);
+        gps.longitude   = nmea_to_degrees(lon_buf, lon_d);
+        gps.speed_knots = atof(spd);
+        gps.course_deg  = atof(crs);
+    }
+}
+
+void parse_gga(char *sentence) {
+    char *fix_q = nmea_field(sentence, 6);
+    char *sats  = nmea_field(sentence, 7);
+
+    gps.fix_quality = atoi(fix_q);
+    gps.satellites  = atoi(sats);
+}
+```
+
+:::note[Static buffer warning]
+The `nmea_field` function uses a static buffer, so calling it multiple times in a sequence overwrites previous results. The `parse_rmc` function copies the fields it needs before making additional calls. In production code, consider passing a destination buffer as a parameter instead.
+:::
+
+## HC-05 Bluetooth Module
+
+The HC-05 is a Bluetooth SPP (Serial Port Profile) module. In normal operation, it acts as a transparent UART bridge: bytes sent to its RX pin appear on the paired phone, and bytes the phone sends come out of the TX pin. No special protocol is needed on the STM32 side.
+
+### AT Command Configuration
+
+Before first use, configure the HC-05 by entering AT command mode. Hold the button on the module (or pull the EN/KEY pin high) while powering it on. The LED will blink slowly (2 seconds on, 2 seconds off) instead of the fast blink. Connect to USART2 and send commands at 38400 baud (AT mode uses 38400 regardless of the configured data baud rate):
+
+| Command | Response | Effect |
+|---------|----------|--------|
+| AT | OK | Test connection |
+| AT+NAME=GPS_Tracker | OK | Set Bluetooth device name |
+| AT+UART=9600,0,0 | OK | Set data mode baud: 9600, 1 stop, no parity |
+| AT+PSWD=1234 | OK | Set pairing PIN |
+| AT+ROLE=0 | OK | Slave mode (phone connects to it) |
+
+After configuration, power cycle the module without holding the button. It enters data mode and waits for a Bluetooth connection.
+
+### Sending GPS Data to Phone
+
+```c title="main.c"
+void bt_send_position(void) {
+    if (!gps.fix_valid) {
+        snprintf(bt_tx_buf, BT_TX_SIZE,
+                 "NO FIX | Sats: %d | %02d:%02d:%02d UTC\r\n",
+                 gps.satellites, gps.hour, gps.minute, gps.second);
+    } else {
+        int lat_deg = (int)gps.latitude;
+        int lat_frac = (int)((gps.latitude - lat_deg) * 10000);
+        if (lat_frac < 0) lat_frac = -lat_frac;
+
+        int lon_deg = (int)gps.longitude;
+        int lon_frac = (int)((gps.longitude - lon_deg) * 10000);
+        if (lon_frac < 0) lon_frac = -lon_frac;
+
+        snprintf(bt_tx_buf, BT_TX_SIZE,
+                 "LAT:%d.%04d LON:%d.%04d SPD:%.1fkn SAT:%d %02d:%02d:%02d\r\n",
+                 lat_deg, lat_frac, lon_deg, lon_frac,
+                 gps.speed_knots, gps.satellites,
+                 gps.hour, gps.minute, gps.second);
+    }
+    HAL_UART_Transmit(&huart2, (uint8_t*)bt_tx_buf, strlen(bt_tx_buf), 500);
+}
+```
+
+On the phone side, use any Bluetooth serial terminal app (such as "Serial Bluetooth Terminal" on Android). Pair with "GPS_Tracker" using PIN 1234, then connect. GPS strings will appear in the terminal every 2 seconds.
+
+## RS-485 Long-Distance Communication
+
+<InArticleAd />
+
+RS-485 uses differential signaling on two wires (A and B). The voltage difference between A and B determines the bit value: A greater than B is a logic 1, B greater than A is a logic 0. Because both wires pick up the same electrical noise, the differential receiver cancels it out. This allows reliable communication over distances up to 1200 meters.
+
+### Direction Control
+
+The MAX485 is half-duplex: it can either transmit or receive, not both. The DE (Driver Enable) pin controls direction. Our firmware must set DE high before transmitting, send the data, wait for the last byte to leave the shift register, then set DE low to return to receive mode.
+
+```c title="main.c"
+#define RS485_TX_EN()  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_SET)
+#define RS485_RX_EN()  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET)
+
+void rs485_send(const char *data, uint16_t len) {
+    RS485_TX_EN();
+    /* Small delay for direction switching (1 bit time at 9600 = ~104 us) */
+    for (volatile int i = 0; i < 100; i++);
+
+    HAL_UART_Transmit(&huart3, (uint8_t*)data, len, 500);
+
+    /* Wait for transmit complete (shift register empty) */
+    while (__HAL_UART_GET_FLAG(&huart3, UART_FLAG_TC) == RESET);
+
+    RS485_RX_EN();
+}
+```
+
+### Simple Request/Response Protocol
+
+For the GPS tracker, the STM32 node sends position data periodically over RS-485. A remote node (a second Blue Pill with another MAX485) can receive and display it. The protocol is simple: each message starts with a header byte (0x02, STX), followed by the payload, and ends with a terminator (0x03, ETX).
+
+```c title="main.c"
+void rs485_send_position(void) {
+    if (!gps.fix_valid) return;
+
+    int lat_deg = (int)gps.latitude;
+    int lat_frac = (int)((gps.latitude - lat_deg) * 10000);
+    if (lat_frac < 0) lat_frac = -lat_frac;
+
+    int lon_deg = (int)gps.longitude;
+    int lon_frac = (int)((gps.longitude - lon_deg) * 10000);
+    if (lon_frac < 0) lon_frac = -lon_frac;
+
+    snprintf(rs485_tx_buf, RS485_TX_SIZE,
+             "\x02LAT:%d.%04d,LON:%d.%04d,SAT:%d\x03",
+             lat_deg, lat_frac, lon_deg, lon_frac, gps.satellites);
+
+    rs485_send(rs485_tx_buf, strlen(rs485_tx_buf));
+}
+```
+
+### Remote Receiver Node
+
+On the receiving end (a second Blue Pill with a MAX485 module), the code listens for messages and can display them on a serial terminal or OLED:
+
+```c title="remote_node_main.c"
+/* Remote receiver: MAX485 RO connected to USART3 RX (PB11) */
+/* DE+RE tied to PB1, held LOW for permanent receive mode */
+
+#define RX_BUF_SIZE 128
+uint8_t rx_buf[RX_BUF_SIZE];
+uint8_t rx_pos = 0;
+uint8_t msg_ready = 0;
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart->Instance == USART3) {
+        uint8_t ch = rx_buf[rx_pos];
+        if (ch == 0x03) { /* ETX: end of message */
+            rx_buf[rx_pos] = '\0';
+            msg_ready = 1;
+            rx_pos = 0;
+        } else {
+            if (rx_pos < RX_BUF_SIZE - 1) rx_pos++;
+        }
+        HAL_UART_Receive_IT(&huart3, &rx_buf[rx_pos], 1);
+    }
+}
+
+/* In main loop: */
+/* if (msg_ready) { process rx_buf (skip STX at index 0); msg_ready = 0; } */
+```
+
+## Complete Main Loop
+
+```c title="main.c"
+/* Private variables */
+uint32_t last_relay_tick = 0;
+#define RELAY_INTERVAL_MS 2000
+
+#define LED_FIX_ON()   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET)
+#define LED_FIX_OFF()  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET)
+
+void led_update(void) {
+    static uint32_t blink_tick = 0;
+    static uint8_t  blink_state = 0;
+
+    if (gps.fix_valid) {
+        /* Blink: 100 ms on, 900 ms off */
+        uint32_t now = HAL_GetTick();
+        if (now - blink_tick >= (blink_state ? 100 : 900)) {
+            blink_tick = now;
+            blink_state = !blink_state;
+            if (blink_state) LED_FIX_ON(); else LED_FIX_OFF();
+        }
+    } else {
+        /* Steady on (active low) to indicate no fix */
+        LED_FIX_ON();
+    }
+}
+
+int main(void) {
+    HAL_Init();
+    SystemClock_Config();
+    MX_GPIO_Init();
+    MX_DMA_Init();
+    MX_USART1_UART_Init();
+    MX_USART2_UART_Init();
+    MX_USART3_UART_Init();
+
+    /* Initialize GPS DMA reception */
+    gps_start_dma();
+
+    /* Set RS-485 to receive mode by default */
+    RS485_RX_EN();
+
+    /* Clear GPS data */
+    memset(&gps, 0, sizeof(gps));
+
+    while (1) {
+        uint32_t now = HAL_GetTick();
+
+        /* Process GPS data when DMA buffer has new data */
+        if (gps_data_ready) {
+            gps_data_ready = 0;
+            gps_process_buffer();
+        }
+
+        /* Relay position every 2 seconds */
+        if (now - last_relay_tick >= RELAY_INTERVAL_MS) {
+            last_relay_tick = now;
+
+            /* Send to phone via Bluetooth */
+            bt_send_position();
+
+            /* Send to remote node via RS-485 */
+            rs485_send_position();
+        }
+
+        /* Update fix LED */
+        led_update();
+    }
+}
+```
+
+## Sending UBX Configuration Commands
+
+The NEO-6M accepts UBX binary commands alongside NMEA. You can disable unwanted NMEA sentences to reduce the data load. For example, to disable the GSV (satellites in view) sentence on UART1:
+
+```c title="main.c"
+/* UBX-CFG-MSG: disable GSV on UART1 */
+static const uint8_t ubx_disable_gsv[] = {
+    0xB5, 0x62,       /* UBX sync bytes */
+    0x06, 0x01,       /* CFG-MSG class/id */
+    0x08, 0x00,       /* Payload length: 8 bytes */
+    0xF0, 0x03,       /* NMEA class, GSV message id */
+    0x00,             /* DDC (I2C): off */
+    0x00,             /* UART1: off */
+    0x00,             /* UART2: off */
+    0x00,             /* USB: off */
+    0x00,             /* SPI: off */
+    0x00,             /* reserved */
+    0x02, 0x38        /* Checksum (CK_A, CK_B) */
+};
+
+void gps_configure(void) {
+    HAL_UART_Transmit(&huart1, (uint8_t*)ubx_disable_gsv,
+                      sizeof(ubx_disable_gsv), 100);
+    HAL_Delay(100);
+    /* Add similar commands for other unwanted sentences (GSA, VTG, GLL) */
+}
+```
+
+Call `gps_configure()` once after startup, before the main loop. The NEO-6M acknowledges UBX commands with a UBX-ACK message, but for simplicity we do not parse the acknowledgment here.
+
+## Project File Structure
+
+<FileTree>
+- GPS_Tracker_UART/
+  - Core/
+    - Inc/
+      - main.h
+    - Src/
+      - main.c
+      - stm32f1xx_it.c
+  - Drivers/
+    - STM32F1xx_HAL_Driver/
+    - CMSIS/
+  - GPS_Tracker_UART.ioc
+</FileTree>
+
+## Testing and Verification
+
+<Steps>
+1. **Test GPS reception first.** Flash the firmware and open a serial terminal on USART2 (the Bluetooth UART). Before pairing Bluetooth, you can connect a USB-serial adapter to PA2/PA3 to see the output. If the GPS module has a fix (outdoors, or near a window), you should see latitude and longitude. If you see "NO FIX", wait a few minutes for satellite acquisition. A cold start can take 5 to 15 minutes.
+
+2. **Test Bluetooth pairing.** Power on the HC-05 (fast-blinking LED). On your phone, scan for Bluetooth devices and pair with "GPS_Tracker" (or "HC-05" if not yet renamed). Open a serial terminal app, connect, and verify that GPS strings appear every 2 seconds.
+
+3. **Test RS-485.** Connect two MAX485 modules with twisted pair or two long jumper wires. On the receiving end, connect another USB-serial adapter to the MAX485 RO pin (or use a second Blue Pill as the remote node). Verify that the STX-framed position messages arrive correctly. Test with a few meters of wire first, then extend to longer distances.
+
+4. **Verify LED behavior.** With no GPS fix, the LED should be steady on. With a fix, it should blink (short flash every second).
+</Steps>
+
+## Production Notes
+
+:::tip[GPS antenna placement]
+The NEO-6M ceramic patch antenna must face the sky with no metal above it. On a PCB, place the GPS module at the board edge with a ground plane underneath but no copper or components above. Keep switching power supplies and high-speed digital traces away from the antenna area. Indoor reception is poor; a window-mounted external antenna with a U.FL connector dramatically improves fix reliability.
+:::
+
+**Bluetooth range.** The HC-05 is a Class 2 device with a rated range of about 10 meters. In practice, with clear line of sight, you can get 20 to 30 meters. Walls and metal objects reduce this significantly. For longer range, consider the HC-12 (433 MHz, up to 1 km) or an ESP32 with BLE.
+
+**RS-485 termination and biasing.** For cable runs longer than a few meters, add 120 ohm termination resistors at each end of the bus (between A and B). For very long runs, add bias resistors: pull A to VCC through 390 ohm and B to GND through 390 ohm. This ensures a defined idle state when no device is driving the bus.
+
+**Baud rate limitations.** At 9600 baud, you can push RS-485 over 1200 meters. At 115200 baud, the maximum reliable distance drops to about 100 to 200 meters, depending on cable quality. For GPS data at 2-second intervals, 9600 baud is more than sufficient and gives you maximum range.
+
+**NMEA checksum validation.** Production firmware should validate the NMEA checksum before using any parsed data. The checksum is the XOR of all characters between the dollar sign and the asterisk. Corrupted sentences (from noise or buffer overruns) will fail the check and should be discarded:
+
+```c title="main.c"
+uint8_t nmea_verify_checksum(const char *sentence) {
+    /* Sentence format: $GPRMC,...*XX  (XX = hex checksum) */
+    if (sentence[0] != '$') return 0;
+
+    uint8_t calc = 0;
+    int i = 1;
+    while (sentence[i] && sentence[i] != '*') {
+        calc ^= sentence[i];
+        i++;
+    }
+    if (sentence[i] != '*') return 0;
+
+    /* Parse the two hex digits after the asterisk */
+    char hex[3] = {sentence[i+1], sentence[i+2], '\0'};
+    uint8_t expected = (uint8_t)strtol(hex, NULL, 16);
+
+    return (calc == expected) ? 1 : 0;
+}
+```
+
+Add `if (!nmea_verify_checksum(nmea_line)) return;` at the top of `parse_rmc` and `parse_gga` for robust operation.
+
+<Copyright />
+<SensorActuatorInterfacingStm32Comments />
+<TawkWidget />
