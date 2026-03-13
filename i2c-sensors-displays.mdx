@@ -12,14 +12,18 @@ import TawkWidget from '../../../../components/TawkWidget.astro';
 import UniversalContentContributors from '../../../../components/UniversalContentContributors.astro';
 import InArticleAd from '../../../../components/InArticleAd.astro';
 import Copyright from '../../../../components/Copyright.astro';
+import BionicText from '../../../../components/BionicText.astro';
 import TailwindWrapper from '../../../../components/TailwindWrapper.jsx';
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import { Card, CardGrid, Badge, Steps, LinkButton, FileTree } from '@astrojs/starlight/components';
-import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
-<UniversalContentContributors
+<UniversalContentContributors 
   contributors={frontmatter.contributors}
 />
+
+
+
+import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
 I2C is the workhorse bus for low-speed peripherals: sensors, displays, EEPROMs, real-time clocks, and dozens of other chips share two wires and coexist at different addresses. In this lesson you will connect three I2C devices to a single bus on the STM32 Blue Pill, write drivers for each, and combine them into a weather station that reads environmental data, displays it on an OLED screen, and logs history to non-volatile memory. A button cycles through live readings, stored history, and min/max statistics. #STM32 #I2C #Sensors
 
@@ -62,13 +66,14 @@ A self-contained weather station that reads temperature, humidity, and barometri
 
 <InArticleAd />
 
+
 I2C (Inter-Integrated Circuit) uses two open-drain lines: SDA (data) and SCL (clock). The master (STM32) generates the clock and initiates transfers. Multiple slaves share the bus, each responding only to its own address. Because the lines are open-drain, external pull-up resistors are mandatory.
 
 ### Signal Timing
 
 A transfer begins with a **start condition** (SDA falls while SCL is high) and ends with a **stop condition** (SDA rises while SCL is high). Between start and stop, data bits are clocked on SCL edges. Each byte is followed by an ACK bit: the receiver pulls SDA low to acknowledge, or leaves it high (NACK) to signal an error or end of transfer.
 
-**7-bit addressing:** The first byte after the start condition contains the 7-bit slave address in bits [7:1] and the R/W direction in bit [0]. So address 0x76 becomes 0xEC for a write (0x76 shifted left, OR with 0) and 0xED for a read (0x76 shifted left, OR with 1). The HAL functions handle this shift automatically; you pass the 8-bit shifted address (0x76 << 1 = 0xEC).
+**7-bit addressing:** The first byte after the start condition contains the 7-bit slave address in bits [7:1] and the R/W direction in bit [0]. So address 0x76 becomes 0xEC for a write (0x76 shifted left, OR with 0) and 0xED for a read (0x76 shifted left, OR with 1). The HAL functions handle this shift automatically; you pass the 8-bit shifted address (`0x76 << 1` = 0xEC).
 
 ### Pull-Up Resistor Selection
 
@@ -87,6 +92,9 @@ Some slow devices hold SCL low to pause the master while they process data. The 
 
 ## I2C Device Address Map
 
+<InArticleAd />
+
+
 | Device | 7-bit Address | 8-bit Write | 8-bit Read | Function |
 |--------|--------------|-------------|------------|----------|
 | BME280 | 0x76 | 0xEC | 0xED | Temperature, humidity, pressure |
@@ -101,6 +109,7 @@ The BME280 address is 0x76 when SDO is tied to GND, and 0x77 when SDO is tied to
 
 <InArticleAd />
 
+
 <Steps>
 1. In the Pinout view, enable I2C1. CubeMX assigns PB6 (SCL) and PB7 (SDA) by default. If you need remapped pins (PB8/PB9), enable the AFIO remap in the System Core section.
 
@@ -114,6 +123,9 @@ The BME280 address is 0x76 when SDO is tied to GND, and 0x77 when SDO is tied to
 </Steps>
 
 ## Wiring
+
+<InArticleAd />
+
 
 | STM32 Pin | Connects To | Function |
 |-----------|-------------|----------|
@@ -130,6 +142,9 @@ Before powering on, verify with a multimeter that SDA and SCL are pulled to 3.3V
 :::
 
 ## I2C Bus Scanner
+
+<InArticleAd />
+
 
 Before writing device-specific drivers, scan the bus to verify that all devices respond. This is the single most useful I2C debugging tool.
 
@@ -172,6 +187,7 @@ If a device does not appear, check wiring, pull-ups, and power supply. If no dev
 ## BME280 Sensor Driver
 
 <InArticleAd />
+
 
 The BME280 measures temperature, pressure, and humidity. Bosch provides compensation formulas in the datasheet that convert raw ADC values to calibrated readings. The calibration coefficients are unique to each sensor and stored in the device's non-volatile memory.
 
@@ -407,6 +423,7 @@ HAL_StatusTypeDef BME280_Read(BME280_Handle *dev, BME280_Data *data)
 
 <InArticleAd />
 
+
 The SSD1306 is a 128x64 monochrome OLED controller. It stores pixel data in a 1024-byte frame buffer organized as 8 pages of 128 columns, where each byte represents 8 vertical pixels. To update the display, you write the entire frame buffer (or a portion of it) over I2C.
 
 ### SSD1306 I2C Protocol
@@ -627,6 +644,7 @@ HAL_StatusTypeDef SSD1306_Update(SSD1306_Handle *dev)
 
 <InArticleAd />
 
+
 The AT24C256 is a 32 KB I2C EEPROM organized in 64-byte pages. Key characteristics:
 
 | Parameter | Value |
@@ -720,6 +738,7 @@ HAL_StatusTypeDef EEPROM_ReadBytes(I2C_HandleTypeDef *hi2c,
 ## Complete Project Code
 
 <InArticleAd />
+
 
 The main application ties all three devices together. Sensor readings are taken every 2 seconds, displayed on the OLED, and logged to EEPROM. A button cycles through three display modes.
 
@@ -1097,6 +1116,9 @@ while (1)
 
 ## CubeIDE Project Structure
 
+<InArticleAd />
+
+
 <FileTree>
 - i2c_weather_station/
   - Core/
@@ -1123,6 +1145,9 @@ while (1)
 
 ## Testing and Verification
 
+<InArticleAd />
+
+
 <Steps>
 1. **Run the I2C scanner first.** Flash the project, open a serial terminal at 115200 baud, and verify that all three devices (0x3C, 0x50, 0x76) appear. If a device is missing, check its wiring and power before proceeding.
 
@@ -1139,6 +1164,7 @@ while (1)
 
 <InArticleAd />
 
+
 **Pull-up resistor selection.** On a breadboard with short wires and three devices, 2.2K pull-ups at 400 kHz work reliably. On a PCB with longer traces or more devices, measure the bus capacitance with an oscilloscope: the SCL rise time should be under 300 ns for Fast mode. If rise times are too slow, reduce the pull-up resistance (minimum 1K for 3.3V logic to stay within the 3 mA sink current spec).
 
 **Bus capacitance.** Each I2C device adds roughly 10 pF of input capacitance. The PCB traces add about 1 to 2 pF per centimeter. The I2C specification limits total bus capacitance to 400 pF. On a breadboard you are well within this limit, but on a product with long ribbon cables to remote sensors, you may need an I2C bus extender (such as the PCA9600) or slower bus speed.
@@ -1151,6 +1177,10 @@ while (1)
 
 **I2C error recovery.** If a slave device holds SDA low (bus lockup), the master cannot issue a start condition. The standard recovery procedure is to toggle SCL manually (9 clock pulses) to force the slave to release SDA. The STM32 HAL does not do this automatically. For robust firmware, implement a bus recovery function that temporarily reconfigures PB6 as GPIO output, sends 9 clock pulses, then reconfigures it as I2C SCL.
 
-<Copyright />
 <SensorActuatorInterfacingStm32Comments />
+
+
+
+<InArticleAd />
 <TawkWidget />
+<Copyright />
