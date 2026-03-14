@@ -65,6 +65,15 @@ A position tracker that reads GPS coordinates from a NEO-6M module, formats them
 
 UART (Universal Asynchronous Receiver/Transmitter) sends data as a series of frames. Each frame contains a start bit (always low), 8 data bits (LSB first), an optional parity bit, and one or two stop bits (always high). The baud rate defines the bit duration: at 9600 baud, each bit lasts approximately 104 microseconds.
 
+```text
+ UART Frame Format (8N1)
+        ~104 us per bit at 9600 baud
+ IDLE ──┐   D0  D1  D2  D3  D4  D5  D6  D7 ┌── IDLE
+ (HIGH)  └───┤───┤───┤───┤───┤───┤───┤───┤──┘  (HIGH)
+        START  <-- 8 data bits (LSB first) -->  STOP
+         bit                                    bit
+```
+
 | Parameter | Common Values |
 |-----------|--------------|
 | Baud rate | 9600, 19200, 38400, 57600, 115200 |
@@ -83,6 +92,27 @@ For this project, all three UART links run at 9600 baud with no parity, 8 data b
 
 <InArticleAd />
 
+
+```text
+ GPS Tracker Data Flow
+ ┌──────────┐  USART1  ┌──────────────┐
+ │  NEO-6M  ├─────────>│  Blue Pill   │
+ │  GPS     │  NMEA    │  (STM32F103) │
+ │  Module  │  9600    │              │
+ └──────────┘  baud    │  Parse NMEA  │
+                        │  Extract     │
+ ┌──────────┐  USART2  │  lat/lon     │
+ │  HC-05   │<─────────┤              │
+ │Bluetooth │  coords  │              │
+ │  to phone│  9600    │              │
+ └──────────┘  baud    │              │
+                        │              │
+ ┌──────────┐  USART3  │              │
+ │  MAX485  │<─────────┤              │
+ │  RS-485  │  coords  │              │
+ │  (remote)│  9600    │              │
+ └──────────┘  baud    └──────────────┘
+```
 
 | STM32 Pin | Function | Connected To |
 |-----------|----------|-------------|
@@ -403,6 +433,21 @@ On the phone side, use any Bluetooth serial terminal app (such as "Serial Blueto
 
 
 RS-485 uses differential signaling on two wires (A and B). The voltage difference between A and B determines the bit value: A greater than B is a logic 1, B greater than A is a logic 0. Because both wires pick up the same electrical noise, the differential receiver cancels it out. This allows reliable communication over distances up to 1200 meters.
+
+```text
+ RS-485 Differential Bus (Half-Duplex)
+  Node A                          Node B
+ ┌──────────┐                   ┌──────────┐
+ │  STM32   │  ┌────────┐      │  STM32   │
+ │  USART3  ├──┤MAX485  │      │  USART   │
+ │  TX/RX   │  │  DI/RO │      │  TX/RX   │
+ │  PB1: DE │──┤  DE/RE │      │  DE pin  │
+ └──────────┘  │   A ────┼──────┼── A      │
+               │   B ────┼──────┼── B      │
+               └────────┘ [120R] └──────┘
+                Twisted pair, up to 1200m
+                120R termination each end
+```
 
 ### Direction Control
 

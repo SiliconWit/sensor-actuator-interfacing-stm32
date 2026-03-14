@@ -54,6 +54,22 @@ An access control system that continuously scans for RFID cards, reads the UID, 
 
 The RC522 operates at 13.56 MHz, which falls in the High Frequency (HF) RFID band. At this frequency, communication happens through electromagnetic induction: the reader's antenna coil generates an alternating magnetic field, and when a card enters the field (typically within 3 to 5 cm), the card's coil picks up enough energy to power the chip and respond.
 
+```text
+ RFID Communication (13.56 MHz)
+ ┌──────────┐    EM Field    ┌──────────┐
+ │  RC522   │   ~3-5 cm     │ MIFARE   │
+ │  Reader  │  ┌────────┐   │  Card    │
+ │          │  │ Antenna │   │          │
+ │  SPI <───┤  │  Coil   │   │ Powered  │
+ │  to MCU  │  │ (( (( )) │   │ by field │
+ │          │  │         │   │          │
+ │  Power:  │  └────────┘   │ 1 KB mem │
+ │  3.3V    │               │ UID: 4B  │
+ └──────────┘               └──────────┘
+  STM32 sends commands       Card responds
+  via SPI to RC522           via load modulation
+```
+
 **MIFARE Classic 1K memory layout:**
 
 | Structure | Size | Details |
@@ -66,6 +82,31 @@ The RC522 operates at 13.56 MHz, which falls in the High Frequency (HF) RFID ban
 | Manufacturer block | Sector 0, Block 0 | Contains UID and manufacturer data (read-only) |
 
 The card's UID (Unique Identifier) is stored in block 0 of sector 0. For MIFARE Classic 1K, the UID is typically 4 bytes (sometimes called NUID since it can repeat across manufacturers). Newer MIFARE cards use 7-byte or 10-byte UIDs.
+
+```text
+ MIFARE Classic 1K Memory Map
+ Sector  Block  Content
+ ┌────── ────── ─────────────────────┐
+ │  0      0    UID + Manufacturer   │
+ │         1    Data (16 bytes)      │
+ │         2    Data (16 bytes)      │
+ │         3    Key A | Access | Key B│
+ ├────── ────── ─────────────────────┤
+ │  1      4    Data (16 bytes)      │
+ │         5    Data (16 bytes)      │
+ │         6    Data (16 bytes)      │
+ │         7    Key A | Access | Key B│
+ ├────── ────── ─────────────────────┤
+ │  ...   ...   (sectors 2-14)       │
+ ├────── ────── ─────────────────────┤
+ │  15    60    Data (16 bytes)      │
+ │        61    Data (16 bytes)      │
+ │        62    Data (16 bytes)      │
+ │        63    Key A | Access | Key B│
+ └────── ────── ─────────────────────┘
+  16 sectors x 4 blocks x 16 bytes
+  = 1024 bytes total
+```
 
 **Default keys:** Factory-fresh MIFARE Classic cards ship with Key A and Key B both set to `0xFF 0xFF 0xFF 0xFF 0xFF 0xFF`. Authentication with either key is required before reading or writing any block in that sector.
 

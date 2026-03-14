@@ -82,6 +82,30 @@ All parts are reused from previous lessons in this course.
 
 The STM32F103C8T6 has limited peripherals, so bus assignment requires planning. The key constraint is that I2C1 is shared between the BME280 and OLED, meaning these two devices must be accessed sequentially (never simultaneously).
 
+```text
+ Multi-Sensor System Architecture
+ ┌──────────────────────────────────────┐
+ │            Blue Pill (STM32F103)     │
+ │                                      │
+ │  I2C1 ──┬── BME280 (0x76)           │
+ │  PB6/7  └── SSD1306 OLED (0x3C)     │
+ │                                      │
+ │  SPI1 ───── microSD (CS=PA4)         │
+ │  PA5/6/7                             │
+ │                                      │
+ │  USART2 ─── HC-05 Bluetooth         │
+ │  PA2/3      (JSON to phone)         │
+ │                                      │
+ │  ADC1 ───── Potentiometer (PA0)      │
+ │             (alarm threshold)        │
+ │                                      │
+ │  GPIO ──┬── Relay (PB12)            │
+ │         ├── Buzzer (PB13)           │
+ │         ├── LEDs: G/Y/R             │
+ │         └── Buttons x2              │
+ └──────────────────────────────────────┘
+```
+
 | Bus | Devices | Clock Speed | Notes |
 |-----|---------|-------------|-------|
 | I2C1 (PB6 SCL, PB7 SDA) | BME280 (0x76), SSD1306 (0x3C) | 400 kHz | Different addresses, sequential access |
@@ -92,6 +116,29 @@ The STM32F103C8T6 has limited peripherals, so bus assignment requires planning. 
 ### Timing Architecture
 
 Different subsystems update at different rates. A simple tick counter in the main loop handles this without needing a real-time OS.
+
+```text
+ Cooperative Scheduling Timeline
+ Time (ms)  0   100  200  300  400  500
+            |    |    |    |    |    |
+ Sensor     *----*----*----*----*----*--
+ (100 ms)
+
+ OLED                            *--
+ (500 ms)
+
+ SD card                              *
+ (1000 ms)
+
+ Bluetooth                            .
+ (2000 ms)
+
+ Alarm      *----*----*----*----*----*--
+ (100 ms)
+
+ Buttons    *-*-*-*-*-*-*-*-*-*-*-*-*-
+ (10 ms)
+```
 
 | Task | Interval | Priority |
 |------|----------|----------|

@@ -69,7 +69,36 @@ A self-contained weather station that reads temperature, humidity, and barometri
 
 I2C (Inter-Integrated Circuit) uses two open-drain lines: SDA (data) and SCL (clock). The master (STM32) generates the clock and initiates transfers. Multiple slaves share the bus, each responding only to its own address. Because the lines are open-drain, external pull-up resistors are mandatory.
 
+```text
+ I2C Bus with Three Devices
+            3.3V
+             │         │
+            [2.2K]    [2.2K]
+             │         │
+  SDA ───────┼─────────┼──────────────
+             │         │
+  SCL ───────┼─────────┼──────────────
+             │         │
+ ┌───────┐ ┌┴───────┐ ┌┴──────────┐
+ │BME280 │ │SSD1306 │ │AT24C256   │
+ │ 0x76  │ │ 0x3C   │ │ 0x50     │
+ │Sensor │ │ OLED   │ │ EEPROM   │
+ └───────┘ └────────┘ └──────────┘
+  PB6 = SCL, PB7 = SDA (I2C1)
+```
+
 ### Signal Timing
+
+```text
+ I2C Write Transaction
+ SCL: ──┐ ┌─┐ ┌─┐ ┌─┐ ┌─┐ ┌─┐ ┌─┐ ┌─┐ ┌─┐ ┌──
+        └─┘ └─┘ └─┘ └─┘ └─┘ └─┘ └─┘ └─┘ └─┘
+
+ SDA: ─┐  A6  A5  A4  A3  A2  A1  A0  W ACK  ┌─
+       └──┤───┤───┤───┤───┤───┤───┤──┤──┤────┘
+     START|<-- 7-bit address -->|R/W| |STOP
+           Slave pulls SDA low ──┘
+```
 
 A transfer begins with a **start condition** (SDA falls while SCL is high) and ends with a **stop condition** (SDA rises while SCL is high). Between start and stop, data bits are clocked on SCL edges. Each byte is followed by an ACK bit: the receiver pulls SDA low to acknowledge, or leaves it high (NACK) to signal an error or end of transfer.
 

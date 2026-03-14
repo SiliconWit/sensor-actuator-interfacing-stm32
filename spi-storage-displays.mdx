@@ -67,6 +67,19 @@ A handheld data logger that reads an analog sensor (potentiometer simulating a s
 
 SPI uses four signals for full-duplex communication. The master generates the clock and selects which slave to talk to:
 
+```text
+ SPI Full-Duplex Transfer
+ Master (STM32)        Slave (ST7735/SD)
+ ┌──────────┐          ┌──────────┐
+ │    MOSI  ├─────────>│ DI       │
+ │    MISO  │<─────────┤ DO       │
+ │    SCK   ├─────────>│ CLK      │
+ │    CS    ├─────────>│ CS (low) │
+ └──────────┘          └──────────┘
+  Data shifts out on MOSI while
+  data shifts in on MISO (same clock)
+```
+
 | Signal | Direction | Function |
 |--------|-----------|----------|
 | SCK | Master to slave | Serial clock |
@@ -90,6 +103,25 @@ Both the ST7735 and SD cards use Mode 0 (CPOL=0, CPHA=0). When two devices share
 ### Multiple Devices on One Bus
 
 MOSI, MISO, and SCK are shared between all devices. Each device gets its own CS pin, controlled by software. The protocol is simple: pull one CS low to talk to that device, keep all others high. Never have two CS lines low at the same time.
+
+```text
+ SPI Bus: Two Devices, Shared Lines
+                  STM32 Blue Pill
+                  ┌──────────────┐
+ ┌─────────┐     │ PA5 (SCK)────┼────┬───── SCK
+ │ ST7735  │     │ PA7 (MOSI)───┼────┼───── MOSI
+ │ TFT     │<────┤ PA6 (MISO)───┼────┼───── MISO
+ │ Display │  CS │ PB0 (CS_TFT)─┼──┐ │
+ └─────────┘     │              │  │ │
+                  │              │  │ │
+ ┌─────────┐     │              │  │ │
+ │ microSD │<────┤ PA4 (CS_SD)──┼──┼─┘
+ │ Card    │  CS │              │  │
+ │ Module  │     │              │  │
+ └─────────┘     └──────────────┘  │
+                 Only one CS low   │
+                 at a time!        GND
+```
 
 ## Wiring
 

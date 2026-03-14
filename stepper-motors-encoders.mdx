@@ -80,6 +80,30 @@ We use 1/8 microstepping as a good balance between resolution, torque, and smoot
 
 The A4988 takes two control signals from the MCU (STEP and DIR) and drives the motor coils with the correct current waveforms. It handles microstepping, current limiting, and coil sequencing.
 
+```text
+ A4988 Stepper Driver Wiring
+               12V Supply
+                  │
+ ┌────────────────┴────────────────┐
+ │          A4988 Module           │
+ │                                  │
+ │  VMOT ─── 12V    VDD ─── 3.3V  │
+ │  GND ──── GND    GND ─── GND   │
+ │                                  │
+ │  STEP <── PA0    DIR <── PA1    │
+ │  (TIM2)         (GPIO)         │
+ │                                  │
+ │  ENABLE <── PA2 (active low)    │
+ │  MS1 <── PB3                    │
+ │  MS2 <── PB4  (1/8 step:       │
+ │  MS3 <── PB5   H, H, L)        │
+ │                                  │
+ │  1A ──┐         ┌── 2A          │
+ │  1B ──┤ NEMA 17 ├── 2B          │
+ │       └─────────┘               │
+ └──────────────────────────────────┘
+```
+
 **Pin functions:**
 
 | A4988 Pin | Function | Connection |
@@ -217,6 +241,23 @@ With a 1 MHz timer tick (prescaler = 71), the timer period in ticks equals 1,000
 
 
 Starting a stepper motor at high speed causes missed steps because the rotor cannot accelerate instantly. The solution is a trapezoidal velocity profile: ramp up from zero to cruise speed, hold cruise speed, then ramp down to zero at the target position.
+
+```text
+ Trapezoidal Velocity Profile
+ Speed
+ (steps/s)
+  800 │         ┌──────────────┐
+      │        /│   Cruise     │\
+      │       / │              │ \
+      │      /  │              │  \
+      │     /   │              │   \
+      │    /    │              │    \
+    0 │───/─────┴──────────────┴─────\──
+      └─────────────────────────────────>
+          Accel    Cruise       Decel
+          Phase    Phase        Phase
+             Position (steps)
+```
 
 **Trapezoidal profile phases:**
 

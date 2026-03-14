@@ -85,6 +85,21 @@ The STM32F103C8T6 has two ADC peripherals (ADC1 and ADC2), each with 12-bit reso
 | ADC clock | 14 MHz maximum | Derived from APB2 with prescaler /2, /4, /6, or /8 |
 | Conversion time | Sampling time + 12.5 cycles | At 12 MHz: 239.5 + 12.5 = 252 cycles = 21 us per channel |
 
+```text
+ Signal Conditioning Pipeline
+ ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌───────┐
+ │  Sensor  │  │ Voltage  │  │ RC Low-  │  │ STM32 │
+ │ (NTC,LDR)├─>│ Divider  ├─>│ Pass     ├─>│ ADC   │
+ │          │  │ 3.3V ref │  │ Filter   │  │ 12-bit│
+ └──────────┘  └──────────┘  └──────────┘  └───────┘
+
+ Voltage Divider:       RC Filter:
+ 3.3V ─[R_fixed]─┬─     Signal ─[R1 1K]─┬── ADC_IN
+                  │              [C1 100nF]
+ Sensor ──────────┘                      │
+                  └─ ADC_IN              GND
+```
+
 ### Input Impedance and Sampling Time
 
 The ADC input has a sample-and-hold capacitor (about 8 pF internally). During the sampling phase, this capacitor must charge to the input voltage through the source impedance. The datasheet recommends keeping the source impedance below 10K ohm for accurate readings. Longer sampling times allow higher source impedance because the capacitor has more time to settle.
@@ -265,6 +280,25 @@ The output follows the input exactly, but can supply milliamps of current to cha
 
 
 Reading three channels one at a time with polling is wasteful. The STM32 ADC supports scan mode, where it converts a sequence of channels automatically. Combined with DMA (Direct Memory Access), the conversion results are transferred to a memory buffer without any CPU intervention.
+
+```text
+ ADC Continuous Scan + DMA
+ ┌───────────────────────────────┐
+ │  ADC1 Scan Sequence           │
+ │  CH0──>CH1──>CH4──>CH0──>... │
+ │  (pot) (NTC) (LDR)  repeat   │
+ └──────────┬────────────────────┘
+            │ DMA1 Channel 1
+            v (automatic transfer)
+ ┌──────────────────────┐
+ │  adc_buffer[3]       │
+ │  [0] = pot  (PA0)    │  CPU reads
+ │  [1] = temp (PA1)    │  buffer at
+ │  [2] = light(PA4)    │  any time
+ └──────────────────────┘
+  Circular mode: DMA restarts
+  after 3 transfers, zero CPU
+```
 
 ### CubeMX Configuration for DMA Scan Mode
 

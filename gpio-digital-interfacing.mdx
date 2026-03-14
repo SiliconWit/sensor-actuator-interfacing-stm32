@@ -31,6 +31,21 @@ Every embedded project starts with digital I/O: reading a button, lighting an LE
 
 <Card title="Ultrasonic Proximity Alarm with Relay Trigger" icon="star">
 A proximity alarm that measures distance with an HC-SR04 ultrasonic sensor. When an object enters the threshold zone (20 cm), the relay module activates and the buzzer sounds at a frequency proportional to distance. A green LED indicates safe range; a red LED indicates close range. A push button arms and disarms the alarm through an external interrupt, so the system responds instantly regardless of what the main loop is doing.
+
+```text
+ HC-SR04 Ultrasonic Timing
+        10us
+ TRIG:  ┌──┐
+ ───────┘  └──────────────────────
+
+         8x 40kHz         Echo
+ ECHO:         ┌───────────────┐
+ ──────────────┘               └──
+               |<-- t_echo --->|
+
+ Distance = (t_echo * 343 m/s) / 2
+ 1 cm ~ 58 us round-trip
+```
 </Card>
 
 **Project specifications:**
@@ -308,6 +323,26 @@ float HCSR04_ReadDistance_cm(void) {
 
 <InArticleAd />
 
+
+```text
+ Proximity Alarm Wiring
+ ┌──────────────┐
+ │  Blue Pill   │     ┌──────────┐
+ │  (STM32F103) │     │ HC-SR04  │
+ │         PA1  ├────>│ Trig     │
+ │         PA2  │<────┤ Echo     │
+ │              │     │ VCC──5V  │
+ │              │     │ GND──GND │
+ │              │     └──────────┘
+ │         PA3  ├────>┤ Relay IN │
+ │         PA4  ├────>┤ Buzzer + │
+ │         PB0  ├──[R]──┤> Green LED
+ │         PB1  ├──[R]──┤> Red LED
+ │        PB12  ├──┤BTN├── GND
+ │              │
+ │  PA13/PA14   ├──── ST-Link SWD
+ └──────────────┘
+```
 
 | Blue Pill Pin | Connection | Notes |
 |---------------|------------|-------|

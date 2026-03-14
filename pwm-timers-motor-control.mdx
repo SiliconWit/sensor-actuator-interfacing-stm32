@@ -98,6 +98,30 @@ For a 50 Hz servo signal (20 ms period) with 1 microsecond resolution:
 | CCR for 90 degrees | 1.5 ms / 1 us | 1500 |
 | CCR for 180 degrees | 2.5 ms / 1 us | 2500 |
 
+```text
+ Servo PWM Signal (50 Hz, 20 ms period)
+ 0 deg:  0.5ms       180 deg:  2.5ms
+ ┌──┐                 ┌──────────┐
+ │  │                 │          │
+ │  └────────────     │          └────
+ |<-- 20 ms --->|     |<-- 20 ms --->|
+
+ L298N H-Bridge Motor Control
+ ┌────────────────────────────────┐
+ │         L298N Module           │
+ │  IN1 ──> Motor direction A     │
+ │  IN2 ──> Motor direction B     │
+ │  ENA ──> PWM speed control     │
+ │          ┌───────────┐        │
+ │  Motor ──┤ H-Bridge  ├── Motor│
+ │  (+)     │ IN1  IN2  │  (-)  │
+ │          │ H    L =FWD│       │
+ │          │ L    H =REV│       │
+ │          │ L    L =STOP│      │
+ │          └───────────┘        │
+ └────────────────────────────────┘
+```
+
 ## CubeMX Timer Configuration
 
 <InArticleAd />
@@ -153,6 +177,26 @@ Open STM32CubeIDE, create a new project for the STM32F103C8Tx, and configure the
 
 <InArticleAd />
 
+
+```text
+ Pan-Tilt + Motor Control Wiring
+ ┌──────────────┐
+ │  Blue Pill   │
+ │              │
+ │  PA0 (TIM2)─┼──── Pan Servo (SG90)
+ │  PA1 (TIM2)─┼──── Tilt Servo (SG90)
+ │              │
+ │  PA2 (ADC) ─┼──── Pot 1 (pan knob)
+ │  PA3 (ADC) ─┼──── Pot 2 (tilt knob)
+ │              │     ┌──────────┐
+ │  PA6 (TIM3)─┼────>│L298N ENA │
+ │  PB0 ───────┼────>│  IN1     ├── Motor
+ │  PB1 ───────┼────>│  IN2     ├── (+/-)
+ │              │     │  12V in  │
+ │  PA7 (TIM3)─┼──── │Buzzer    │
+ │  PB10 ──────┼──┤BTN├ GND     │
+ └──────────────┘     └──────────┘
+```
 
 | STM32 Pin | Connects To | Function |
 |-----------|-------------|----------|

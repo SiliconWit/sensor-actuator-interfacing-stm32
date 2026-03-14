@@ -31,6 +31,23 @@ Previous lessons accessed peripherals through polling loops or simple interrupts
 
 <Card title="CAN Bus Sensor Network (Two Nodes)" icon="star">
 Node A continuously samples a potentiometer through DMA-driven ADC and transmits the 12-bit value over CAN bus every 100 ms. It also sends a heartbeat frame every second. Node B receives the sensor data using hardware message filtering, prints it over UART, drives an LED with PWM proportional to the received value, and can send a command frame back to toggle Node A's onboard LED. Both nodes handle CAN errors and recover from bus-off state automatically.
+
+```text
+ CAN Bus Two-Node Topology
+ ┌────────────┐                  ┌────────────┐
+ │  Node A    │    CAN Bus       │  Node B    │
+ │  (Sensor)  │   (twisted pair) │  (Display) │
+ │            │                  │            │
+ │  STM32 ───┤  ┌──────────┐   ├─── STM32   │
+ │  PA11 RX  ├──┤ MCP2551  │   │  PA11 RX   │
+ │  PA12 TX  ├──┤ CANH ────┼───┤  MCP2551   │
+ │            │  │ CANL ────┼───┤  CANH/CANL │
+ │  Pot(PA0) │  └──────────┘   │  LED(PA8)  │
+ │  LED(PC13)│ [120R]     [120R]│  BTN(PB0)  │
+ └────────────┘                  └────────────┘
+  Sensor data 0x100 ──>         <── Command 0x200
+  Heartbeat  0x001 ──>
+```
 </Card>
 
 **Project specifications:**
@@ -85,6 +102,19 @@ On the STM32F103C8T6, the CAN peripheral and USB share PA11 and PA12. When CAN i
 
 
 The STM32F103 has one DMA controller (DMA1) with 7 channels. Each channel is hardwired to specific peripheral requests. DMA moves data between memory and peripherals (or memory to memory) without CPU intervention. The CPU sets up source, destination, and transfer count, then the DMA controller handles every byte.
+
+```text
+ DMA Data Flow (ADC to Memory)
+ ┌─────────────┐  DMA1 Ch1   ┌──────────┐
+ │  ADC1       │  (hardware  │  SRAM    │
+ │  Data Reg   ├─────────────>│ Buffer   │
+ │  (0x4001    │  request)   │ adc_buf  │
+ │   244C)     │             │ [N]      │
+ └─────────────┘             └──────────┘
+  Source: fixed addr          Dest: incrementing
+  Size: halfword (16-bit)    Circular mode:
+  No CPU involvement          restarts at [0]
+```
 
 ### DMA Transfer Modes
 
