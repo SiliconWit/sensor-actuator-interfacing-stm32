@@ -12,6 +12,8 @@ sidebar:
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Contributors Welcome](https://img.shields.io/badge/contributors-welcome-orange)
 
+**Read this course at:** [https://siliconwit.com/education/sensor-actuator-interfacing-stm32/](https://siliconwit.com/education/sensor-actuator-interfacing-stm32/)
+
 A hands-on course covering sensor, actuator, and communication module interfacing on the STM32 Blue Pill (STM32F103C8T6) using STM32CubeIDE and HAL. Topics include GPIO, ADC, PWM, I2C, SPI, UART, RFID, stepper motors, DMA, CAN bus, and a multi-sensor capstone project.
 
 ## Lessons
