@@ -12,14 +12,18 @@ import TawkWidget from '../../../../components/TawkWidget.astro';
 import UniversalContentContributors from '../../../../components/UniversalContentContributors.astro';
 import InArticleAd from '../../../../components/InArticleAd.astro';
 import Copyright from '../../../../components/Copyright.astro';
+import BionicText from '../../../../components/BionicText.astro';
 import TailwindWrapper from '../../../../components/TailwindWrapper.jsx';
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import { Card, CardGrid, Badge, Steps, LinkButton, FileTree } from '@astrojs/starlight/components';
-import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
-<UniversalContentContributors
+<UniversalContentContributors 
   contributors={frontmatter.contributors}
 />
+
+
+
+import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
 Every lesson in this course focused on one or two peripherals at a time. Real products never work that way. A commercial sensor node reads multiple sensors on a shared bus, logs data to storage, updates a display, streams wirelessly, and triggers alarms, all running concurrently on a single microcontroller. This capstone builds exactly that system. You will integrate the BME280 environmental sensor, SSD1306 OLED display, microSD card, HC-05 Bluetooth module, potentiometer, relay, buzzer, LEDs, and push buttons into one cohesive data logger with a state machine UI. #STM32 #Capstone #DataLogger
 
@@ -44,6 +48,9 @@ A standalone data acquisition system that reads temperature, humidity, and press
 | Status | 3x LEDs (green, yellow, red) | GPIO (PB14, PB15, PA8) | Continuous |
 
 ## Parts List
+
+<InArticleAd />
+
 
 All parts are reused from previous lessons in this course.
 
@@ -70,6 +77,7 @@ All parts are reused from previous lessons in this course.
 
 <InArticleAd />
 
+
 ### Bus Allocation
 
 The STM32F103C8T6 has limited peripherals, so bus assignment requires planning. The key constraint is that I2C1 is shared between the BME280 and OLED, meaning these two devices must be accessed sequentially (never simultaneously).
@@ -95,6 +103,9 @@ Different subsystems update at different rates. A simple tick counter in the mai
 | Alarm check | 100 ms | High |
 
 ## Complete Wiring Table
+
+<InArticleAd />
+
 
 | Blue Pill Pin | Connects To | Function |
 |---------------|-------------|----------|
@@ -124,6 +135,9 @@ Both the BME280 and OLED share the same I2C bus. Use one pair of 4.7K pull-up re
 
 ## CubeMX Configuration
 
+<InArticleAd />
+
+
 <Steps>
 1. **Create new project** for STM32F103C8T6 in STM32CubeIDE.
 
@@ -145,6 +159,9 @@ Both the BME280 and OLED share the same I2C bus. Use one pair of 4.7K pull-up re
 </Steps>
 
 ## Peripheral Initialization Order
+
+<InArticleAd />
+
 
 The initialization order matters for reliable startup:
 
@@ -171,6 +188,7 @@ MX_IWDG_Init();
 ## Data Structures
 
 <InArticleAd />
+
 
 ```c title="data_types.h"
 #ifndef DATA_TYPES_H
@@ -220,6 +238,9 @@ typedef struct {
 
 ## BME280 Driver (I2C)
 
+<InArticleAd />
+
+
 ```c title="bme280.c"
 #define BME280_ADDR (0x76 << 1)  /* HAL uses 8-bit address */
 
@@ -260,16 +281,16 @@ uint8_t BME280_Init(I2C_HandleTypeDef *hi2c)
     dig_P8 = (cal[21] << 8) | cal[20];
     dig_P9 = (cal[23] << 8) | cal[22];
 
-    /* Humidity calibration (split across registers) */
-    uint8_t hcal[7];
+    /* Humidity calibration (split across registers 0xA1 and 0xE1-0xE7) */
+    uint8_t hcal[8];
     HAL_I2C_Mem_Read(hi2c, BME280_ADDR, 0xA1, 1, &hcal[0], 1, 100);
-    HAL_I2C_Mem_Read(hi2c, BME280_ADDR, 0xE1, 1, &hcal[1], 6, 100);
+    HAL_I2C_Mem_Read(hi2c, BME280_ADDR, 0xE1, 1, &hcal[1], 7, 100);
     dig_H1_u = hcal[0];
     dig_H2 = (hcal[2] << 8) | hcal[1];
     dig_H3_u = hcal[3];
     dig_H4 = (hcal[4] << 4) | (hcal[5] & 0x0F);
     dig_H5 = (hcal[6] << 4) | ((hcal[5] >> 4) & 0x0F);
-    dig_H6 = (int8_t)hcal[6];
+    dig_H6 = (int8_t)hcal[7];
 
     /* Configure: humidity oversampling x1 (must be set before ctrl_meas) */
     uint8_t ctrl_hum = 0x01;
@@ -342,6 +363,9 @@ uint8_t BME280_Read(I2C_HandleTypeDef *hi2c, float *temp, float *hum, float *pre
 ```
 
 ## SSD1306 OLED Driver (I2C)
+
+<InArticleAd />
+
 
 ```c title="ssd1306.c"
 #define SSD1306_ADDR (0x3C << 1)
@@ -422,18 +446,19 @@ void SSD1306_Update(I2C_HandleTypeDef *hi2c)
 
 <InArticleAd />
 
+
 ```c title="sd_logger.c"
 #include "fatfs.h"
 
 static FIL log_file;
+static FATFS sd_fs;  /* Must persist for the lifetime of the mount */
 static uint8_t sd_mounted = 0;
 
 uint8_t SD_Logger_Init(void)
 {
-    FATFS fs;
     FRESULT res;
 
-    res = f_mount(&fs, "", 1);
+    res = f_mount(&sd_fs, "", 1);
     if (res != FR_OK) return 0;
 
     /* Open or create log file */
@@ -493,6 +518,9 @@ Enable FATFS under Middleware in CubeMX. Set the SD interface to SPI and select 
 
 ## Bluetooth Streaming (UART)
 
+<InArticleAd />
+
+
 ```c title="bluetooth.c"
 #include <stdio.h>
 #include <string.h>
@@ -518,6 +546,9 @@ uint8_t BT_SendJSON(UART_HandleTypeDef *huart, SensorData *data)
 ```
 
 ## Display Pages (State Machine)
+
+<InArticleAd />
+
 
 ```c title="display.c"
 void Display_LiveData(SystemState *state)
@@ -606,6 +637,9 @@ void Display_Update(I2C_HandleTypeDef *hi2c, SystemState *state)
 
 ## Alarm Logic
 
+<InArticleAd />
+
+
 ```c title="alarm.c"
 static uint32_t buzzer_tick = 0;
 static uint8_t buzzer_state = 0;
@@ -663,6 +697,7 @@ void Alarm_Check(SystemState *state)
 ## Complete main.c
 
 <InArticleAd />
+
 
 ```c title="main.c"
 #include "main.h"
@@ -875,6 +910,9 @@ int main(void)
 
 ## Project File Structure
 
+<InArticleAd />
+
+
 <FileTree>
 - MultiSensorLogger/
   - Core/
@@ -908,6 +946,9 @@ int main(void)
 
 ## Testing
 
+<InArticleAd />
+
+
 <Steps>
 1. **Flash the firmware** using ST-Link and STM32CubeIDE.
 
@@ -930,6 +971,7 @@ int main(void)
 
 <InArticleAd />
 
+
 | Peripheral | Active Current | Notes |
 |------------|---------------|-------|
 | STM32F103 (72 MHz) | ~30 mA | Dominant consumer |
@@ -944,6 +986,9 @@ For battery operation, consider powering down peripherals when idle. The BME280 
 
 ## Production Notes
 
+<InArticleAd />
+
+
 <Card title="From Breadboard to Product" icon="setting">
 **PCB layout:** Place decoupling capacitors (100 nF ceramic) within 5 mm of every IC power pin. Route I2C traces as short differential pairs. Keep the SD card traces short and away from noisy PWM signals. Use a ground pour on the bottom layer.
 
@@ -957,6 +1002,9 @@ For battery operation, consider powering down peripherals when idle. The BME280 
 </Card>
 
 ## Course Summary
+
+<InArticleAd />
+
 
 This course covered ten lessons progressing from basic GPIO interfacing to a complete multi-sensor integrated system:
 
@@ -975,6 +1023,9 @@ This course covered ten lessons progressing from basic GPIO interfacing to a com
 
 ## Where to Go Next
 
+<InArticleAd />
+
+
 <CardGrid>
   <Card title="IoT Systems" icon="star">
     The [IoT Systems](/education/iot-systems/) course takes these sensor nodes online. Connect your STM32 or ESP32 to MQTT brokers, build cloud dashboards, and implement over-the-air firmware updates. The data logger you built here becomes the edge device in a full IoT architecture.
@@ -985,6 +1036,10 @@ This course covered ten lessons progressing from basic GPIO interfacing to a com
   </Card>
 </CardGrid>
 
-<Copyright />
 <SensorActuatorInterfacingStm32Comments />
+
+
+
+<InArticleAd />
 <TawkWidget />
+<Copyright />

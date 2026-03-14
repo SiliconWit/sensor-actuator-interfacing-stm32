@@ -12,14 +12,18 @@ import TawkWidget from '../../../../components/TawkWidget.astro';
 import UniversalContentContributors from '../../../../components/UniversalContentContributors.astro';
 import InArticleAd from '../../../../components/InArticleAd.astro';
 import Copyright from '../../../../components/Copyright.astro';
+import BionicText from '../../../../components/BionicText.astro';
 import TailwindWrapper from '../../../../components/TailwindWrapper.jsx';
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import { Card, CardGrid, Badge, Steps, LinkButton, FileTree } from '@astrojs/starlight/components';
-import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
-<UniversalContentContributors
+<UniversalContentContributors 
   contributors={frontmatter.contributors}
 />
+
+
+
+import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
 SPI is the fastest bus you will use on the Blue Pill, and it is the protocol of choice for color displays and SD cards. In this lesson you will connect two SPI devices to the same bus, manage chip select lines in software, write a TFT display driver from initialization commands to chart rendering, and integrate ST's FatFS middleware for reliable file operations on an SD card. The result is a self-contained data logger that shows live readings on a color screen and saves everything to a CSV file. #STM32 #SPI #DataLogger
 
@@ -60,6 +64,7 @@ A handheld data logger that reads an analog sensor (potentiometer simulating a s
 
 <InArticleAd />
 
+
 SPI uses four signals for full-duplex communication. The master generates the clock and selects which slave to talk to:
 
 | Signal | Direction | Function |
@@ -88,6 +93,9 @@ MOSI, MISO, and SCK are shared between all devices. Each device gets its own CS 
 
 ## Wiring
 
+<InArticleAd />
+
+
 | STM32 Pin | Function | ST7735 TFT | SD Card Module |
 |-----------|----------|-----------|----------------|
 | PA5 | SPI1_SCK | SCK | SCK |
@@ -111,6 +119,9 @@ Some microSD modules are designed for 5V Arduino boards and have onboard regulat
 
 ## CubeMX Configuration
 
+<InArticleAd />
+
+
 <Steps>
 1. **Create a new project** for STM32F103C8Tx in STM32CubeIDE. Set the debug interface to Serial Wire (SYS category).
 
@@ -130,6 +141,9 @@ Some microSD modules are designed for 5V Arduino boards and have onboard regulat
 </Steps>
 
 ## ST7735 TFT Display Driver
+
+<InArticleAd />
+
 
 The ST7735 uses a command/data protocol layered on top of SPI. The DC (Data/Command) pin tells the display whether the byte being sent is a command or pixel data. DC low means command, DC high means data.
 
@@ -334,6 +348,7 @@ void tft_draw_chart(uint16_t new_val) {
 
 <InArticleAd />
 
+
 The SD card communicates over SPI using a command/response protocol. In SPI mode, the SD card uses only CS, SCK, MOSI (DI), and MISO (DO). CubeMX generates the FatFS middleware, but you must implement the low-level disk I/O functions in `user_diskio.c` (or `diskio.c`, depending on your CubeMX version).
 
 ### SPI Speed Switching
@@ -487,6 +502,7 @@ log_stats_t sd_read_stats(void) {
 
 <InArticleAd />
 
+
 The main loop ties everything together: sample ADC, update display, log to SD, and handle the button press for view switching.
 
 ```c title="main.c"
@@ -584,6 +600,9 @@ int main(void) {
 
 ## Project File Structure
 
+<InArticleAd />
+
+
 <FileTree>
 - DataLogger_SPI/
   - Core/
@@ -606,6 +625,9 @@ int main(void) {
 
 ## Testing and Verification
 
+<InArticleAd />
+
+
 <Steps>
 1. **Test the TFT display first.** Comment out all SD card code. Flash the firmware and verify that the display initializes and shows the "SENSOR LOG" label with a voltage reading. Turn the potentiometer and confirm the chart scrolls.
 
@@ -617,6 +639,9 @@ int main(void) {
 </Steps>
 
 ## Production Notes
+
+<InArticleAd />
+
 
 :::tip[SPI speed limits]
 The ST7735 datasheet allows up to 15.15 MHz write clock, but most 1.8" modules work fine at 18 MHz. The SD card is more conservative: many cards fail above 10 MHz in SPI mode. The 4.5 MHz we use here is safe for all cards. In production, test your specific card brand at higher speeds and fall back if errors occur.
@@ -630,6 +655,10 @@ The ST7735 datasheet allows up to 15.15 MHz write clock, but most 1.8" modules w
 
 **Decoupling.** Add a 100 uF electrolytic capacitor across the SD card module power pins. SD cards create current spikes during sector writes that can momentarily drop the supply voltage and cause SPI errors.
 
-<Copyright />
 <SensorActuatorInterfacingStm32Comments />
+
+
+
+<InArticleAd />
 <TawkWidget />
+<Copyright />

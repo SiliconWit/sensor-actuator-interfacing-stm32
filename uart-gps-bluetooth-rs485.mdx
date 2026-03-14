@@ -12,14 +12,18 @@ import TawkWidget from '../../../../components/TawkWidget.astro';
 import UniversalContentContributors from '../../../../components/UniversalContentContributors.astro';
 import InArticleAd from '../../../../components/InArticleAd.astro';
 import Copyright from '../../../../components/Copyright.astro';
+import BionicText from '../../../../components/BionicText.astro';
 import TailwindWrapper from '../../../../components/TailwindWrapper.jsx';
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import { Card, CardGrid, Badge, Steps, LinkButton, FileTree } from '@astrojs/starlight/components';
-import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
-<UniversalContentContributors
+<UniversalContentContributors 
   contributors={frontmatter.contributors}
 />
+
+
+
+import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
 UART is the simplest serial protocol, but the devices that speak it are some of the most interesting: GPS receivers that decode satellite signals into latitude and longitude, Bluetooth modules that turn a wire into a wireless link, and RS-485 transceivers that push serial data hundreds of meters over twisted pair. This lesson connects all three to the Blue Pill, each on its own USART peripheral, and builds a GPS tracker that relays coordinates to your phone and to a remote display node. #STM32 #UART #GPS
 
@@ -58,6 +62,7 @@ A position tracker that reads GPS coordinates from a NEO-6M module, formats them
 
 <InArticleAd />
 
+
 UART (Universal Asynchronous Receiver/Transmitter) sends data as a series of frames. Each frame contains a start bit (always low), 8 data bits (LSB first), an optional parity bit, and one or two stop bits (always high). The baud rate defines the bit duration: at 9600 baud, each bit lasts approximately 104 microseconds.
 
 | Parameter | Common Values |
@@ -75,6 +80,9 @@ UART (Universal Asynchronous Receiver/Transmitter) sends data as a series of fra
 For this project, all three UART links run at 9600 baud with no parity, 8 data bits, 1 stop bit, and no flow control. The NEO-6M and HC-05 both default to these settings.
 
 ## Wiring
+
+<InArticleAd />
+
 
 | STM32 Pin | Function | Connected To |
 |-----------|----------|-------------|
@@ -111,6 +119,9 @@ The HC-05 operates at 3.3V logic but is often mounted on a carrier board with a 
 
 ## CubeMX Configuration
 
+<InArticleAd />
+
+
 <Steps>
 1. **Create a new project** for STM32F103C8Tx. Set debug to Serial Wire.
 
@@ -128,6 +139,9 @@ The HC-05 operates at 3.3V logic but is often mounted on a carrier board with a 
 </Steps>
 
 ## DMA-Based UART Reception
+
+<InArticleAd />
+
 
 Polling UART byte by byte is unreliable for GPS data. The NEO-6M sends bursts of NMEA sentences (often 400+ bytes) once per second, and if the CPU is busy when bytes arrive, they are lost. DMA with idle line detection solves this completely: DMA writes incoming bytes to a circular buffer without CPU intervention, and the idle line interrupt fires when the GPS pauses between sentences, telling you that a complete batch of data is ready.
 
@@ -216,6 +230,7 @@ uint16_t gps_process_buffer(void) {
 
 <InArticleAd />
 
+
 The NEO-6M outputs NMEA 0183 sentences as ASCII text. Each sentence starts with a dollar sign character, a talker/sentence ID, comma-separated fields, an asterisk, and a two-character hex checksum. The two most useful sentences are:
 
 **GPRMC (Recommended Minimum):** Time, fix status, latitude, longitude, speed, course, date.
@@ -280,15 +295,22 @@ static float nmea_to_degrees(const char *coord, const char *dir) {
 }
 
 void parse_rmc(char *sentence) {
-    char *time_str = nmea_field(sentence, 1);
-    char *status   = nmea_field(sentence, 2);
-    char *lat      = nmea_field(sentence, 3);
-    char *lat_dir  = nmea_field(sentence, 4);
-    char *lon      = nmea_field(sentence, 5);
-    char *lon_dir  = nmea_field(sentence, 6);
-    char *spd      = nmea_field(sentence, 7);
-    char *crs      = nmea_field(sentence, 8);
-    char *date_str = nmea_field(sentence, 9);
+    /*
+     * nmea_field returns a pointer to a static buffer, so each call
+     * overwrites the previous result. Copy each field immediately.
+     */
+    char time_str[20], status[4], lat_buf[20], lat_d[4];
+    char lon_buf[20], lon_d[4], spd[12], crs[12], date_str[12];
+
+    strncpy(time_str, nmea_field(sentence, 1), 19); time_str[19] = '\0';
+    strncpy(status,   nmea_field(sentence, 2), 3);  status[3] = '\0';
+    strncpy(lat_buf,  nmea_field(sentence, 3), 19); lat_buf[19] = '\0';
+    strncpy(lat_d,    nmea_field(sentence, 4), 3);  lat_d[3] = '\0';
+    strncpy(lon_buf,  nmea_field(sentence, 5), 19); lon_buf[19] = '\0';
+    strncpy(lon_d,    nmea_field(sentence, 6), 3);  lon_d[3] = '\0';
+    strncpy(spd,      nmea_field(sentence, 7), 11); spd[11] = '\0';
+    strncpy(crs,      nmea_field(sentence, 8), 11); crs[11] = '\0';
+    strncpy(date_str, nmea_field(sentence, 9), 11); date_str[11] = '\0';
 
     gps.fix_valid = (status[0] == 'A') ? 1 : 0;
 
@@ -305,13 +327,6 @@ void parse_rmc(char *sentence) {
     }
 
     if (gps.fix_valid) {
-        /* nmea_field uses a static buffer, so copy fields before calling again */
-        char lat_buf[20], lat_d[4], lon_buf[20], lon_d[4];
-        strncpy(lat_buf, nmea_field(sentence, 3), 19);
-        strncpy(lat_d,   nmea_field(sentence, 4), 3);
-        strncpy(lon_buf, nmea_field(sentence, 5), 19);
-        strncpy(lon_d,   nmea_field(sentence, 6), 3);
-
         gps.latitude    = nmea_to_degrees(lat_buf, lat_d);
         gps.longitude   = nmea_to_degrees(lon_buf, lon_d);
         gps.speed_knots = atof(spd);
@@ -333,6 +348,9 @@ The `nmea_field` function uses a static buffer, so calling it multiple times in 
 :::
 
 ## HC-05 Bluetooth Module
+
+<InArticleAd />
+
 
 The HC-05 is a Bluetooth SPP (Serial Port Profile) module. In normal operation, it acts as a transparent UART bridge: bytes sent to its RX pin appear on the paired phone, and bytes the phone sends come out of the TX pin. No special protocol is needed on the STM32 side.
 
@@ -382,6 +400,7 @@ On the phone side, use any Bluetooth serial terminal app (such as "Serial Blueto
 ## RS-485 Long-Distance Communication
 
 <InArticleAd />
+
 
 RS-485 uses differential signaling on two wires (A and B). The voltage difference between A and B determines the bit value: A greater than B is a logic 1, B greater than A is a logic 0. Because both wires pick up the same electrical noise, the differential receiver cancels it out. This allows reliable communication over distances up to 1200 meters.
 
@@ -464,6 +483,9 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 
 ## Complete Main Loop
 
+<InArticleAd />
+
+
 ```c title="main.c"
 /* Private variables */
 uint32_t last_relay_tick = 0;
@@ -536,6 +558,9 @@ int main(void) {
 
 ## Sending UBX Configuration Commands
 
+<InArticleAd />
+
+
 The NEO-6M accepts UBX binary commands alongside NMEA. You can disable unwanted NMEA sentences to reduce the data load. For example, to disable the GSV (satellites in view) sentence on UART1:
 
 ```c title="main.c"
@@ -566,6 +591,9 @@ Call `gps_configure()` once after startup, before the main loop. The NEO-6M ackn
 
 ## Project File Structure
 
+<InArticleAd />
+
+
 <FileTree>
 - GPS_Tracker_UART/
   - Core/
@@ -582,6 +610,9 @@ Call `gps_configure()` once after startup, before the main loop. The NEO-6M ackn
 
 ## Testing and Verification
 
+<InArticleAd />
+
+
 <Steps>
 1. **Test GPS reception first.** Flash the firmware and open a serial terminal on USART2 (the Bluetooth UART). Before pairing Bluetooth, you can connect a USB-serial adapter to PA2/PA3 to see the output. If the GPS module has a fix (outdoors, or near a window), you should see latitude and longitude. If you see "NO FIX", wait a few minutes for satellite acquisition. A cold start can take 5 to 15 minutes.
 
@@ -593,6 +624,9 @@ Call `gps_configure()` once after startup, before the main loop. The NEO-6M ackn
 </Steps>
 
 ## Production Notes
+
+<InArticleAd />
+
 
 :::tip[GPS antenna placement]
 The NEO-6M ceramic patch antenna must face the sky with no metal above it. On a PCB, place the GPS module at the board edge with a ground plane underneath but no copper or components above. Keep switching power supplies and high-speed digital traces away from the antenna area. Indoor reception is poor; a window-mounted external antenna with a U.FL connector dramatically improves fix reliability.
@@ -629,6 +663,10 @@ uint8_t nmea_verify_checksum(const char *sentence) {
 
 Add `if (!nmea_verify_checksum(nmea_line)) return;` at the top of `parse_rmc` and `parse_gga` for robust operation.
 
-<Copyright />
 <SensorActuatorInterfacingStm32Comments />
+
+
+
+<InArticleAd />
 <TawkWidget />
+<Copyright />

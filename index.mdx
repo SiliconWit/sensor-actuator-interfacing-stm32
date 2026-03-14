@@ -37,7 +37,7 @@ The [Embedded Programming: STM32](/education/embedded-programming-stm32/) course
 
 ## Why STM32CubeIDE Instead of arm-gcc + OpenOCD?
 
-The Embedded Programming: STM32 course used the bare toolchain (arm-none-eabi-gcc, OpenOCD, make) because the goal was to understand what happens at the register level: startup code, linker scripts, vector tables, and raw peripheral access. That knowledge is valuable and this course assumes you have it.
+The [Embedded Programming: STM32](/education/embedded-programming-stm32/) course used the bare toolchain (arm-none-eabi-gcc, OpenOCD, make) because the goal was to understand what happens at the register level: startup code, linker scripts, vector tables, and raw peripheral access. That knowledge is valuable and this course assumes you have it.
 
 For interfacing, the priorities shift. You are configuring I2C buses, SPI chip selects, UART baud rates, ADC channels, DMA streams, and CAN bit timing, sometimes several of these on the same project. Doing all of that through raw register writes is slow and error-prone when the goal is to get a sensor talking. CubeIDE with CubeMX gives you:
 
@@ -207,7 +207,7 @@ Most parts cost between 1 and 5 USD each. Many are reusable across lessons.
 </Steps>
 
 :::tip[You already know what HAL does underneath]
-If you completed the Embedded Programming: STM32 course, you wrote bare-register code for GPIO, UART, SPI, ADC, and timers. That knowledge does not go to waste. When HAL behaves unexpectedly in this course, you will know exactly which registers to inspect and why. The bare toolchain gave you X-ray vision; CubeIDE gives you speed.
+If you completed the [Embedded Programming: STM32](/education/embedded-programming-stm32/) course, you wrote bare-register code for GPIO, UART, SPI, ADC, and timers. That knowledge does not go to waste. When HAL behaves unexpectedly in this course, you will know exactly which registers to inspect and why. The bare toolchain gave you X-ray vision; CubeIDE gives you speed.
 :::
 
 <Copyright />

@@ -12,14 +12,18 @@ import TawkWidget from '../../../../components/TawkWidget.astro';
 import UniversalContentContributors from '../../../../components/UniversalContentContributors.astro';
 import InArticleAd from '../../../../components/InArticleAd.astro';
 import Copyright from '../../../../components/Copyright.astro';
+import BionicText from '../../../../components/BionicText.astro';
 import TailwindWrapper from '../../../../components/TailwindWrapper.jsx';
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import { Card, CardGrid, Badge, Steps, LinkButton, FileTree } from '@astrojs/starlight/components';
-import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
-<UniversalContentContributors
+<UniversalContentContributors 
   contributors={frontmatter.contributors}
 />
+
+
+
+import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
 RFID identification is everywhere: office badges, transit cards, warehouse inventory tags, and hotel key cards. The RC522 module gives you a low-cost 13.56 MHz RFID reader that communicates over SPI, and MIFARE Classic 1K cards provide 1 KB of readable/writable memory organized into sectors and blocks. In this lesson you will build a complete door access control system that scans cards, checks UIDs against an authorized list, provides visual and audio feedback, and displays status on an OLED screen. A designated master card lets you add or remove authorized cards without reprogramming the firmware. #STM32 #RFID #AccessControl
 
@@ -45,6 +49,9 @@ An access control system that continuously scans for RFID cards, reads the UID, 
 
 ## RFID and NFC Fundamentals
 
+<InArticleAd />
+
+
 The RC522 operates at 13.56 MHz, which falls in the High Frequency (HF) RFID band. At this frequency, communication happens through electromagnetic induction: the reader's antenna coil generates an alternating magnetic field, and when a card enters the field (typically within 3 to 5 cm), the card's coil picks up enough energy to power the chip and respond.
 
 **MIFARE Classic 1K memory layout:**
@@ -66,9 +73,10 @@ The card's UID (Unique Identifier) is stored in block 0 of sector 0. For MIFARE 
 MIFARE Classic uses a proprietary cipher (Crypto-1) that has been publicly broken since 2008. Do not rely on MIFARE Classic for high-security applications. For production access control, consider MIFARE DESFire EV2/EV3, which uses AES-128 encryption. For this lesson, we use Classic because it is inexpensive, widely available, and sufficient for learning the protocol.
 :::
 
+## RC522 Module and SPI Interface
+
 <InArticleAd />
 
-## RC522 Module and SPI Interface
 
 The MFRC522 chip communicates over SPI at up to 10 MHz. The module typically comes on a breakout board with an onboard antenna, voltage regulator, and header pins.
 
@@ -92,6 +100,9 @@ To write a register, send the address byte with bit 7 clear (address shifted lef
 | TPrescalerReg | 0x2B | Timer prescaler |
 
 ## Wiring
+
+<InArticleAd />
+
 
 ### RC522 to Blue Pill (SPI1)
 
@@ -130,6 +141,9 @@ The RC522 module must run at 3.3V. Do not power it from 5V, even though some bre
 
 ## CubeMX Configuration
 
+<InArticleAd />
+
+
 <Steps>
 1. **Create a new STM32CubeIDE project** for STM32F103C8Tx. Select the Blue Pill board or the chip directly.
 
@@ -144,9 +158,10 @@ The RC522 module must run at 3.3V. Do not power it from 5V, even though some bre
 6. **Generate code** and open the project.
 </Steps>
 
+## RC522 Driver Implementation
+
 <InArticleAd />
 
-## RC522 Driver Implementation
 
 The driver handles low-level SPI communication, register access, card detection, and MIFARE authentication.
 
@@ -588,9 +603,10 @@ void RC522_Halt(void)
 }
 ```
 
+## Card Detection and Anti-Collision
+
 <InArticleAd />
 
-## Card Detection and Anti-Collision
 
 The card detection sequence follows the ISO 14443A protocol:
 
@@ -606,6 +622,9 @@ The card detection sequence follows the ISO 14443A protocol:
 
 ## Access Control State Machine
 
+<InArticleAd />
+
+
 The system uses five states to manage card scanning and authorization:
 
 | State | Description | Transitions |
@@ -619,6 +638,9 @@ The system uses five states to manage card scanning and authorization:
 **Master card behavior:** The first card ever scanned when the authorized list is empty becomes the master card. When the master card is presented later, the system enters "enroll mode" for 10 seconds. During enroll mode, scanning a new card adds it to the authorized list (if not already present) or removes it (if already present). This toggling lets you manage cards without firmware changes.
 
 ## Complete Project Code
+
+<InArticleAd />
+
 
 ```c title="main.c"
 /* Includes */
@@ -1088,9 +1110,10 @@ void SysTick_Handler(void)
 }
 ```
 
+## CubeMX Project Structure
+
 <InArticleAd />
 
-## CubeMX Project Structure
 
 After generating code from CubeMX, your project folder should look like this:
 
@@ -1115,6 +1138,9 @@ After generating code from CubeMX, your project folder should look like this:
 </FileTree>
 
 ## Reading and Writing MIFARE Blocks
+
+<InArticleAd />
+
 
 Beyond UID-based access, you can store data on the card itself. Each sector (except sector 0) has three data blocks (blocks 0, 1, 2) and one sector trailer (block 3). The sector trailer holds Key A, access bits, and Key B.
 
@@ -1154,6 +1180,9 @@ Block 3 of each sector is the sector trailer containing keys and access bits. Wr
 
 ## Access Bits and Sector Trailer Structure
 
+<InArticleAd />
+
+
 The sector trailer (block 3 of each sector) has this 16-byte layout:
 
 | Bytes | Content |
@@ -1164,9 +1193,10 @@ The sector trailer (block 3 of each sector) has this 16-byte layout:
 
 Access bits control read/write permissions for each block in the sector. The default access bits (0xFF 0x07 0x80 0x69) allow read and write with Key A or Key B on all data blocks.
 
+## Testing the System
+
 <InArticleAd />
 
-## Testing the System
 
 <Steps>
 1. **Flash the firmware** to the Blue Pill using ST-Link and STM32CubeIDE.
@@ -1186,6 +1216,9 @@ Access bits control read/write permissions for each block in the sector. The def
 
 ## Production Notes
 
+<InArticleAd />
+
+
 **Antenna positioning.** The RC522 module's PCB antenna provides roughly 3 to 5 cm of read range in open air. Mounting behind plastic or wood is fine. Metal surfaces reflect the 13.56 MHz signal and drastically reduce range. Keep the antenna at least 3 cm away from any metal panel.
 
 **Metal interference.** If you mount the reader behind a metal door, you need an antenna extension cable or a remote-mount antenna. Some commercial readers use a ferrite backing layer to isolate the antenna from metal surfaces.
@@ -1196,8 +1229,10 @@ Access bits control read/write permissions for each block in the sector. The def
 
 **ESD protection.** The antenna is directly exposed to the outside world in a door-mount scenario. Add TVS diodes on the SPI lines and antenna connections if the reader is accessible to the public.
 
-<Copyright />
-
 <SensorActuatorInterfacingStm32Comments />
 
+
+
+<InArticleAd />
 <TawkWidget />
+<Copyright />

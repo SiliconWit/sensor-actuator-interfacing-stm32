@@ -12,14 +12,18 @@ import TawkWidget from '../../../../components/TawkWidget.astro';
 import UniversalContentContributors from '../../../../components/UniversalContentContributors.astro';
 import InArticleAd from '../../../../components/InArticleAd.astro';
 import Copyright from '../../../../components/Copyright.astro';
+import BionicText from '../../../../components/BionicText.astro';
 import TailwindWrapper from '../../../../components/TailwindWrapper.jsx';
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import { Card, CardGrid, Badge, Steps, LinkButton, FileTree } from '@astrojs/starlight/components';
-import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
-<UniversalContentContributors
+<UniversalContentContributors 
   contributors={frontmatter.contributors}
 />
+
+
+
+import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
 Every embedded project starts with digital I/O: reading a button, lighting an LED, driving a relay. This lesson sets up STM32CubeIDE for the first time, walks through CubeMX pin configuration, and builds a proximity alarm that combines an ultrasonic distance sensor, a relay module, a buzzer, and a push button with interrupt-driven control. By the end you will have a working alarm system and a project template you can reuse for every lesson in this course. #STM32 #GPIO #Sensors
 
@@ -63,6 +67,7 @@ A proximity alarm that measures distance with an HC-SR04 ultrasonic sensor. When
 ## Setting Up STM32CubeIDE
 
 <InArticleAd />
+
 
 ### Why CubeIDE + HAL for This Course
 
@@ -135,6 +140,9 @@ All your application code goes between the `/* USER CODE BEGIN */` and `/* USER 
 
 ## GPIO Output: LEDs, Relay, and Buzzer
 
+<InArticleAd />
+
+
 ### Driving an LED
 
 Each GPIO pin on the STM32F103 can source or sink up to 25 mA. A typical LED needs 10 to 20 mA. With a 3.3V output and a 2V forward voltage across the LED, a 330 ohm resistor sets the current to about 4 mA, which is visible and safe.
@@ -184,6 +192,7 @@ The `delay_us` function uses the SysTick counter for microsecond delays (defined
 
 <InArticleAd />
 
+
 ### The Bounce Problem
 
 Mechanical switches bounce for 1 to 10 ms after contact. During this window the signal oscillates between high and low many times. Without debouncing, a single press might register as five or ten presses.
@@ -215,6 +224,9 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 
 ## External Interrupts (EXTI)
 
+<InArticleAd />
+
+
 Polling a button in the main loop wastes CPU cycles and can miss short presses if the loop is busy. The STM32's EXTI controller connects each GPIO pin to a dedicated interrupt line. When the pin sees a falling edge (button pressed, pulled to GND), the NVIC fires the interrupt handler immediately.
 
 CubeMX already configured PB12 as EXTI12 with a falling-edge trigger. The generated code in `stm32f1xx_it.c` calls `HAL_GPIO_EXTI_IRQHandler()`, which clears the pending flag and calls `HAL_GPIO_EXTI_Callback()`. You override the callback (shown above) in `main.c`.
@@ -222,6 +234,9 @@ CubeMX already configured PB12 as EXTI12 with a falling-edge trigger. The genera
 **NVIC priority:** The STM32F103 uses 4 bits for priority (0 to 15, where 0 is highest). SysTick defaults to priority 0. We set EXTI to priority 1 so it does not preempt the system tick, but still responds faster than any main-loop polling.
 
 ## HC-SR04 Ultrasonic Sensor
+
+<InArticleAd />
+
 
 The HC-SR04 measures distance by sending a 40 kHz ultrasonic burst and timing the echo return. The interface is simple:
 
@@ -293,6 +308,7 @@ float HCSR04_ReadDistance_cm(void) {
 
 <InArticleAd />
 
+
 | Blue Pill Pin | Connection | Notes |
 |---------------|------------|-------|
 | PA1 | HC-SR04 Trig | 3.3V logic, sensor accepts it |
@@ -309,6 +325,9 @@ float HCSR04_ReadDistance_cm(void) {
 | PA14 | ST-Link SWCLK | Debug interface |
 
 ## Complete Project Code
+
+<InArticleAd />
+
 
 The following `main.c` is the complete application. Paste it into the generated `main.c`, keeping all content within the USER CODE markers.
 
@@ -489,6 +508,9 @@ int main(void) {
 
 ## Production Notes
 
+<InArticleAd />
+
+
 <Card title="Moving from Breadboard to PCB" icon="setting">
 
 **ESD protection on GPIO pins.** Any pin connected to an external cable or connector is exposed to electrostatic discharge. Add TVS diodes (e.g., PESD5V0S1BA) on the HC-SR04 echo line and the button input. Cost: a few cents per pin.
@@ -507,6 +529,10 @@ int main(void) {
 If you do not have a relay module yet, connect PA3 to an LED through a 330 ohm resistor instead. The logic is inverted (LED lights when active low), but you can verify the alarm logic works before adding the relay.
 :::
 
-<Copyright />
 <SensorActuatorInterfacingStm32Comments />
+
+
+
+<InArticleAd />
 <TawkWidget />
+<Copyright />

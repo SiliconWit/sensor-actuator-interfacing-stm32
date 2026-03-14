@@ -12,14 +12,18 @@ import TawkWidget from '../../../../components/TawkWidget.astro';
 import UniversalContentContributors from '../../../../components/UniversalContentContributors.astro';
 import InArticleAd from '../../../../components/InArticleAd.astro';
 import Copyright from '../../../../components/Copyright.astro';
+import BionicText from '../../../../components/BionicText.astro';
 import TailwindWrapper from '../../../../components/TailwindWrapper.jsx';
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import { Card, CardGrid, Badge, Steps, LinkButton, FileTree } from '@astrojs/starlight/components';
-import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
-<UniversalContentContributors
+<UniversalContentContributors 
   contributors={frontmatter.contributors}
 />
+
+
+
+import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
 Stepper motors move in precise, repeatable increments without needing a feedback sensor for basic operation. Pair one with a proper acceleration profile and you get smooth, accurate positioning at speeds that would cause a constant-velocity approach to stall. Add a rotary encoder for user input and limit switches for homing, and you have the core motion control system found in CNC machines, 3D printers, and laboratory equipment. In this lesson you will build a complete linear positioning stage on the Blue Pill using the A4988 stepper driver, hardware timer step generation, trapezoidal acceleration, and STM32 encoder mode. #STM32 #StepperMotor #MotionControl
 
@@ -47,6 +51,9 @@ A positioning system that homes automatically on startup, lets you dial in a tar
 
 ## Stepper Motor Fundamentals
 
+<InArticleAd />
+
+
 A bipolar stepper motor has two coils (phases) and four wires. By energizing the coils in sequence, the rotor advances one step at a time. A standard NEMA 17 with 200 steps per revolution gives 1.8 degrees per step.
 
 **Stepping modes:**
@@ -66,9 +73,10 @@ A bipolar stepper motor has two coils (phases) and four wires. By energizing the
 
 We use 1/8 microstepping as a good balance between resolution, torque, and smoothness. The A4988 handles all the current sequencing internally.
 
+## A4988 Driver Module
+
 <InArticleAd />
 
-## A4988 Driver Module
 
 The A4988 takes two control signals from the MCU (STEP and DIR) and drives the motor coils with the correct current waveforms. It handles microstepping, current limiting, and coil sequencing.
 
@@ -108,6 +116,9 @@ The A4988 module requires a 100 uF electrolytic capacitor across VMOT and GND, a
 :::
 
 ## Wiring
+
+<InArticleAd />
+
 
 ### A4988 to Blue Pill
 
@@ -159,9 +170,10 @@ The A4988 module requires a 100 uF electrolytic capacitor across VMOT and GND, a
 The Blue Pill GND and the 12V supply GND must be connected together. Without a common ground reference, the STEP and DIR signals have no defined voltage level relative to the A4988, and the driver will behave erratically or not respond at all.
 :::
 
+## CubeMX Configuration
+
 <InArticleAd />
 
-## CubeMX Configuration
 
 <Steps>
 1. **Create a new STM32CubeIDE project** for STM32F103C8Tx.
@@ -183,6 +195,9 @@ The Blue Pill GND and the 12V supply GND must be connected together. Without a c
 
 ## Step Generation with Timer
 
+<InArticleAd />
+
+
 The key insight for smooth stepper control: instead of using `HAL_Delay()` between steps (which blocks the CPU and prevents any other processing), we use a timer interrupt. Each time the timer fires, we toggle the STEP pin and advance the step counter. By changing the timer period between interrupts, we control the step rate, which directly controls speed.
 
 **Calculating timer period for a desired step rate:**
@@ -198,6 +213,9 @@ With a 1 MHz timer tick (prescaler = 71), the timer period in ticks equals 1,000
 
 ## Acceleration Profiles
 
+<InArticleAd />
+
+
 Starting a stepper motor at high speed causes missed steps because the rotor cannot accelerate instantly. The solution is a trapezoidal velocity profile: ramp up from zero to cruise speed, hold cruise speed, then ramp down to zero at the target position.
 
 **Trapezoidal profile phases:**
@@ -210,9 +228,10 @@ Starting a stepper motor at high speed causes missed steps because the rotor can
 
 The acceleration is implemented by adjusting the timer period after each step. For linear acceleration, the period change per step follows: new_period = old_period - (old_period^2 * acceleration) / timer_freq^2. A simplified integer approximation works well in practice.
 
+## Rotary Encoder with Timer Encoder Mode
+
 <InArticleAd />
 
-## Rotary Encoder with Timer Encoder Mode
 
 The STM32's timer encoder mode is a hardware feature that counts quadrature encoder pulses without any software intervention. The timer counter register automatically increments or decrements based on the A and B channel phase relationship, giving you direction detection for free.
 
@@ -221,6 +240,9 @@ In "Encoder Mode TI1 and TI2" (4x counting), every edge of both channels trigger
 The encoder counter is 16-bit (0 to 65535). We set the counter midpoint (32768) as the initial position so the encoder can turn in both directions without wrapping immediately.
 
 ## Limit Switches and Homing
+
+<InArticleAd />
+
 
 Limit switches are wired as normally closed (NC) to ground. When the switch is not pressed, the circuit is closed and the pin reads LOW (through the pull-up and the closed switch to GND, the current path keeps the pin LOW). Wait, let us clarify: with a pull-up resistor enabled and the NC switch connected between the pin and GND, when the switch is closed (not triggered), the pin reads LOW. When the carriage hits the switch and opens it, the pin reads HIGH (pulled up). This is fail-safe: a broken wire reads the same as a triggered switch, stopping motion.
 
@@ -241,6 +263,9 @@ Limit switches are wired as normally closed (NC) to ground. When the switch is n
 </Steps>
 
 ## Complete Project Code
+
+<InArticleAd />
+
 
 ```c title="main.c"
 /* Includes */
@@ -299,6 +324,7 @@ static volatile MotionState_t motion_state = MOTION_IDLE;
 static volatile SystemState_t sys_state = SYS_HOMING;
 static volatile uint8_t step_pin_state = 0;
 static volatile uint8_t homed = 0;
+static volatile int8_t homing_next_phase = -1;  /* -1 = no pending, 0/1/2 = start phase */
 
 /* UART transmit buffer */
 static char uart_buf[128];
@@ -446,19 +472,22 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     if (!step_pin_state) return;
 
     /* --- Homing modes --- */
+    /*
+     * Homing phase transitions set a flag; the main loop picks up
+     * the flag and calls Motion_StartHoming() outside the ISR.
+     * Never call HAL_Delay or blocking functions inside an ISR.
+     */
     if (motion_state == MOTION_HOMING_SEEK) {
         if (LimitHome_Read()) {
             Motion_Stop();
-            HAL_Delay(50);
-            Motion_StartHoming(1);  /* Back off */
+            homing_next_phase = 1;  /* Main loop starts backoff */
         }
         return;
     }
     if (motion_state == MOTION_HOMING_BACKOFF) {
         if (!LimitHome_Read()) {
             Motion_Stop();
-            HAL_Delay(50);
-            Motion_StartHoming(2);  /* Fine approach */
+            homing_next_phase = 2;  /* Main loop starts fine approach */
         }
         return;
     }
@@ -732,8 +761,14 @@ int main(void)
     {
         LED_Update();
 
-        /* Wait for homing to complete */
+        /* Handle homing phase transitions (deferred from ISR) */
         if (sys_state == SYS_HOMING) {
+            if (homing_next_phase >= 0) {
+                int8_t phase = homing_next_phase;
+                homing_next_phase = -1;
+                HAL_Delay(50);  /* Settling delay (safe here in main loop) */
+                Motion_StartHoming(phase);
+            }
             if (homed) {
                 sys_state = SYS_IDLE;
                 encoder_target = 0;
@@ -826,9 +861,10 @@ void SysTick_Handler(void)
 }
 ```
 
+## CubeMX Project Structure
+
 <InArticleAd />
 
-## CubeMX Project Structure
 
 <FileTree>
 - Stepper_Positioning/
@@ -850,9 +886,15 @@ void SysTick_Handler(void)
 
 ## Identifying Motor Coil Pairs
 
+<InArticleAd />
+
+
 If your NEMA 17 motor has four unlabeled wires, you need to identify which two wires form each coil. Use a multimeter in resistance mode: two wires that show a few ohms of resistance (typically 1 to 5 ohms) belong to the same coil. The other two wires form the second coil. If you swap the wires within a coil pair, the motor reverses direction. If you accidentally connect one wire from each coil to the same driver output, the motor will vibrate in place without rotating.
 
 ## Testing the System
+
+<InArticleAd />
+
 
 <Steps>
 1. **Set the current limit** on the A4988 before connecting the motor. Measure Vref with a multimeter and adjust the trimmer. For a 1.2A motor with 0.1 ohm sense resistors, set Vref to about 0.96V. Start lower (0.5V) and increase if the motor misses steps under load.
@@ -872,6 +914,9 @@ If your NEMA 17 motor has four unlabeled wires, you need to identify which two w
 
 ## Production Notes
 
+<InArticleAd />
+
+
 **Resonance frequencies.** Stepper motors have natural resonance frequencies (typically 80 to 120 full steps/sec for NEMA 17) where vibration peaks and torque drops sharply. Microstepping reduces this problem significantly. If you hear loud buzzing at a specific speed, increase the acceleration rate to pass through that speed quickly rather than cruising at it.
 
 **Microstepping vs. torque.** Each increase in microstepping resolution reduces the holding torque at each microstep position. Full-step mode gives 100% rated torque, while 1/16 microstepping gives roughly 30%. For applications requiring both high resolution and high torque, consider a motor with higher rated torque or use a gearbox.
@@ -884,8 +929,10 @@ If your NEMA 17 motor has four unlabeled wires, you need to identify which two w
 
 **Closed-loop upgrade.** This lesson uses open-loop control (no position feedback from the motor itself). For applications where missed steps are unacceptable, add a linear encoder to the moving carriage and compare the encoder count against the commanded step count. If they diverge, the system can flag a fault or attempt recovery.
 
-<Copyright />
-
 <SensorActuatorInterfacingStm32Comments />
 
+
+
+<InArticleAd />
 <TawkWidget />
+<Copyright />

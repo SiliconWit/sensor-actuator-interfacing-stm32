@@ -12,14 +12,18 @@ import TawkWidget from '../../../../components/TawkWidget.astro';
 import UniversalContentContributors from '../../../../components/UniversalContentContributors.astro';
 import InArticleAd from '../../../../components/InArticleAd.astro';
 import Copyright from '../../../../components/Copyright.astro';
+import BionicText from '../../../../components/BionicText.astro';
 import TailwindWrapper from '../../../../components/TailwindWrapper.jsx';
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import { Card, CardGrid, Badge, Steps, LinkButton, FileTree } from '@astrojs/starlight/components';
-import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
-<UniversalContentContributors
+<UniversalContentContributors 
   contributors={frontmatter.contributors}
 />
+
+
+
+import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
 Most real-world signals are analog: temperature, light intensity, pressure, position. The STM32's 12-bit ADC converts these continuous voltages into discrete numbers your firmware can process. But raw sensor signals are often noisy, weakly driven, or outside the ADC's input range. This lesson covers the full path from sensor to digital value: voltage dividers, RC filters, op-amp buffers, and the ADC in single, continuous, and DMA scan modes. The project ties it all together into an environmental monitor that reads three analog channels simultaneously. #STM32 #ADC #SignalConditioning
 
@@ -69,6 +73,7 @@ An environmental monitoring system that reads temperature (NTC thermistor), ambi
 
 <InArticleAd />
 
+
 The STM32F103C8T6 has two ADC peripherals (ADC1 and ADC2), each with 12-bit resolution and up to 1 MHz sample rate. Key parameters you need to understand before configuring the ADC:
 
 | Parameter | Value | Why It Matters |
@@ -87,6 +92,9 @@ The ADC input has a sample-and-hold capacitor (about 8 pF internally). During th
 For our sensors, a 239.5-cycle sampling time is generous but ensures accuracy even with the high impedance of the thermistor voltage divider (5K Thevenin equivalent). At 12 MHz ADC clock, each channel takes 21 us, and three channels complete in 63 us. That is fast enough for environmental monitoring.
 
 ## Single Channel Conversion: Reading the Potentiometer
+
+<InArticleAd />
+
 
 The simplest ADC usage reads one channel and waits for the result. Connect the potentiometer with its outer pins to 3.3V and GND, and the wiper to PA0.
 
@@ -122,6 +130,7 @@ This works but blocks the CPU during conversion. For multiple channels, we need 
 ## Voltage Divider Sensors
 
 <InArticleAd />
+
 
 ### NTC Thermistor
 
@@ -214,6 +223,9 @@ float ADC_To_Lux_Approx(uint32_t adc_value) {
 
 ## Signal Conditioning
 
+<InArticleAd />
+
+
 ### RC Low-Pass Filter
 
 Analog signals pick up noise from nearby digital switching, power supply ripple, and electromagnetic interference. A first-order RC low-pass filter attenuates noise above its cutoff frequency:
@@ -250,6 +262,7 @@ The output follows the input exactly, but can supply milliamps of current to cha
 ## Multi-Channel Scan Mode with DMA
 
 <InArticleAd />
+
 
 Reading three channels one at a time with polling is wasteful. The STM32 ADC supports scan mode, where it converts a sequence of channels automatically. Combined with DMA (Direct Memory Access), the conversion results are transferred to a memory buffer without any CPU intervention.
 
@@ -291,6 +304,9 @@ From this point, `adc_dma_buf` is updated continuously by hardware. The CPU can 
 
 ## Printf Over UART
 
+<InArticleAd />
+
+
 To print readings to a serial terminal, redirect `printf` to UART2 by overriding `_write`:
 
 ```c title="Printf redirection"
@@ -308,6 +324,9 @@ int _write(int file, char *ptr, int len) {
 In the project settings, enable "Use float with printf" under **C/C++ Build > Settings > MCU Settings** so that `%f` format works with floating point values.
 
 ## Wiring Diagram
+
+<InArticleAd />
+
 
 | Blue Pill Pin | Connection | Notes |
 |---------------|------------|-------|
@@ -343,6 +362,7 @@ In the project settings, enable "Use float with printf" under **C/C++ Build > Se
 ## Complete Project Code
 
 <InArticleAd />
+
 
 ```c title="main.c"
 /* USER CODE BEGIN Header */
@@ -472,8 +492,8 @@ int main(void) {
     HAL_Init();
     SystemClock_Config();
     MX_GPIO_Init();
-    MX_ADC1_Init();
     MX_DMA_Init();
+    MX_ADC1_Init();
     MX_USART2_UART_Init();
 
     /* USER CODE BEGIN 2 */
@@ -542,6 +562,9 @@ int main(void) {
 
 ## Steinhart-Hart vs. Beta Equation
 
+<InArticleAd />
+
+
 The full Steinhart-Hart equation uses three coefficients (A, B, C) and is accurate across a wide temperature range. The simplified Beta equation uses only one coefficient and is accurate within about 1 degree C over a 50-degree window centered on 25 degrees C. For environmental monitoring (indoor temperatures from 10 to 45 degrees C), the Beta equation is sufficient.
 
 If you need higher accuracy, use the full Steinhart-Hart coefficients from your thermistor datasheet:
@@ -561,6 +584,9 @@ float SteinhartHart(float resistance) {
 
 ## Production Notes
 
+<InArticleAd />
+
+
 <Card title="Moving from Breadboard to PCB" icon="setting">
 
 **ADC grounding.** The STM32F103 has separate VDDA and VSSA pins for the analog supply. On a PCB, connect VDDA to 3.3V through a ferrite bead (e.g., BLM18PG121SN1) and place a 1 uF + 100 nF capacitor pair as close to VDDA as possible. Never route digital signals under the ADC input traces.
@@ -579,6 +605,10 @@ float SteinhartHart(float resistance) {
 If the ADC values seem stuck or wrong, check these common issues: (1) DMA initialization must come before ADC initialization in the CubeMX generated code, so verify the call order in `main.c`; (2) the ADC clock must not exceed 14 MHz (check the clock tree); (3) make sure VDDA is actually connected to 3.3V on your Blue Pill (some cheap clones leave this pin floating).
 :::
 
-<Copyright />
 <SensorActuatorInterfacingStm32Comments />
+
+
+
+<InArticleAd />
 <TawkWidget />
+<Copyright />

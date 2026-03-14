@@ -630,8 +630,12 @@ HAL_StatusTypeDef SSD1306_Update(SSD1306_Handle *dev)
     ssd1306_cmd(dev, 0x00);
     ssd1306_cmd(dev, 0x07);
 
-    /* Send frame buffer with data control byte prefix */
-    uint8_t tx_buf[SSD1306_BUF_SIZE + 1];
+    /*
+     * Send frame buffer with data control byte prefix.
+     * Static buffer avoids placing 1025 bytes on the stack,
+     * which can overflow the default 1 KB stack on STM32F1.
+     */
+    static uint8_t tx_buf[SSD1306_BUF_SIZE + 1];
     tx_buf[0] = 0x40;  /* Data stream */
     memcpy(&tx_buf[1], dev->buffer, SSD1306_BUF_SIZE);
 
@@ -682,13 +686,16 @@ HAL_StatusTypeDef EEPROM_ReadBytes(I2C_HandleTypeDef *hi2c,
 ```c title="eeprom.c"
 #include "eeprom.h"
 
-static void eeprom_wait_ready(I2C_HandleTypeDef *hi2c)
+static uint8_t eeprom_wait_ready(I2C_HandleTypeDef *hi2c)
 {
-    /* Acknowledge polling: keep trying until the EEPROM responds */
-    while (HAL_I2C_IsDeviceReady(hi2c, EEPROM_ADDR, 10, 100) != HAL_OK)
+    /* Acknowledge polling: keep trying until the EEPROM responds.
+     * Timeout after 50 ms (10x the 5 ms max write cycle). */
+    uint32_t start = HAL_GetTick();
+    while (HAL_I2C_IsDeviceReady(hi2c, EEPROM_ADDR, 1, 10) != HAL_OK)
     {
-        /* EEPROM is still busy with the previous write cycle */
+        if (HAL_GetTick() - start > 50) return 0;  /* Timeout */
     }
+    return 1;
 }
 
 HAL_StatusTypeDef EEPROM_WriteByte(I2C_HandleTypeDef *hi2c,

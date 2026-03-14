@@ -12,14 +12,18 @@ import TawkWidget from '../../../../components/TawkWidget.astro';
 import UniversalContentContributors from '../../../../components/UniversalContentContributors.astro';
 import InArticleAd from '../../../../components/InArticleAd.astro';
 import Copyright from '../../../../components/Copyright.astro';
+import BionicText from '../../../../components/BionicText.astro';
 import TailwindWrapper from '../../../../components/TailwindWrapper.jsx';
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import { Card, CardGrid, Badge, Steps, LinkButton, FileTree } from '@astrojs/starlight/components';
-import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
-<UniversalContentContributors
+<UniversalContentContributors 
   contributors={frontmatter.contributors}
 />
+
+
+
+import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
 Previous lessons accessed peripherals through polling loops or simple interrupts. That approach works for a single sensor, but it falls apart when you need continuous ADC sampling while pushing frames to a display and exchanging messages across a vehicle bus. This lesson introduces DMA for hands-free data movement, proper interrupt architecture for real-time responsiveness, and CAN bus for reliable multi-node communication. The project connects two STM32 Blue Pills over a CAN bus: one reads a potentiometer via DMA and transmits the value, the other receives it and drives an LED. #STM32 #CAN #DMA
 
@@ -56,6 +60,9 @@ Node A continuously samples a potentiometer through DMA-driven ADC and transmits
 
 ## Parts Needed
 
+<InArticleAd />
+
+
 | Part | Quantity | Notes |
 |------|----------|-------|
 | Blue Pill (STM32F103C8T6) | 2 | One per CAN node |
@@ -75,6 +82,7 @@ On the STM32F103C8T6, the CAN peripheral and USB share PA11 and PA12. When CAN i
 ## DMA Controller Architecture
 
 <InArticleAd />
+
 
 The STM32F103 has one DMA controller (DMA1) with 7 channels. Each channel is hardwired to specific peripheral requests. DMA moves data between memory and peripherals (or memory to memory) without CPU intervention. The CPU sets up source, destination, and transfer count, then the DMA controller handles every byte.
 
@@ -114,6 +122,9 @@ DMA generates two interrupts during circular operation:
 The CPU processes the first half while DMA fills the second half, and vice versa. This gives you uninterrupted streaming with no data loss.
 
 ## Interrupt Architecture on Cortex-M3
+
+<InArticleAd />
+
 
 The Nested Vectored Interrupt Controller (NVIC) on the STM32F103 uses 4 bits of priority, split between preemption priority and sub-priority based on the priority grouping setting.
 
@@ -179,6 +190,7 @@ static inline uint8_t ring_buf_get(RingBuffer *rb, uint8_t *byte) {
 
 <InArticleAd />
 
+
 CAN (Controller Area Network) is a multi-master, differential serial bus designed for noisy environments. It uses two wires (CANH and CANL) with differential signaling, making it resistant to electromagnetic interference. The bus requires 120 ohm termination resistors at each physical end.
 
 ### Bus Electrical Levels
@@ -217,6 +229,9 @@ CAN bit timing divides each bit into time quanta (tq). For the STM32F103, CAN ru
 - SJW = 1 tq (resynchronization jump width)
 
 ## Wiring: Two-Node CAN Network
+
+<InArticleAd />
+
 
 ### Node A Wiring (Sensor Node)
 
@@ -271,6 +286,7 @@ STM32 PA11 <-- MCP2551 RXD    CANL ---///--- CANL    MCP2551 RXD --> STM32 PA11
 
 <InArticleAd />
 
+
 ### Node A Configuration
 
 <Steps>
@@ -282,7 +298,7 @@ STM32 PA11 <-- MCP2551 RXD    CANL ---///--- CANL    MCP2551 RXD --> STM32 PA11
 
 4. **Enable DMA for ADC1:** In the DMA Settings tab of ADC1, add DMA1 Channel 1. Set Mode = Circular, Data Width = Half Word (16-bit).
 
-5. **Configure TIM3:** Under Timers, enable TIM3 with a 100 ms period. Prescaler = 7199 (36 MHz / 7200 = 5 kHz), Counter Period = 499 (5000 / 500 = 10 Hz, i.e. 100 ms). Enable the update interrupt.
+5. **Configure TIM3:** Under Timers, enable TIM3 with a 100 ms period. Prescaler = 7199 (timer clock 72 MHz / 7200 = 10 kHz), Counter Period = 999 (10000 / 1000 = 10 Hz, i.e. 100 ms). Note: TIM3 is on APB1, and since APB1 prescaler is /2, the timer clock is multiplied by 2, giving 72 MHz (not 36 MHz). Enable the update interrupt.
 
 6. **Configure PC13:** Set as GPIO Output (onboard LED).
 
@@ -310,6 +326,9 @@ STM32 PA11 <-- MCP2551 RXD    CANL ---///--- CANL    MCP2551 RXD --> STM32 PA11
 </Steps>
 
 ## Node A: Sensor Node Code
+
+<InArticleAd />
+
 
 ### CAN Initialization and Filter Setup
 
@@ -521,6 +540,7 @@ int main(void)
 
 <InArticleAd />
 
+
 ### CAN Filter Configuration (Mask Mode)
 
 Node B uses mask mode filtering to accept only messages with IDs in the range 0x100 to 0x1FF (sensor data) and the heartbeat ID 0x001. Two filter banks handle this.
@@ -700,6 +720,7 @@ int main(void)
 
 <InArticleAd />
 
+
 The bxCAN peripheral tracks three error counters and transitions through error states automatically:
 
 | State | TEC / REC | Behavior |
@@ -721,6 +742,9 @@ void CAN_PrintErrorCounters(void)
 ```
 
 ## CubeMX Project Structure
+
+<InArticleAd />
+
 
 <FileTree>
 - NodeA_CAN/
@@ -758,6 +782,9 @@ void CAN_PrintErrorCounters(void)
 
 ## Testing the Network
 
+<InArticleAd />
+
+
 <Steps>
 1. **Flash Node A** with its firmware using ST-Link.
 
@@ -774,6 +801,9 @@ void CAN_PrintErrorCounters(void)
 
 ## Production Notes
 
+<InArticleAd />
+
+
 <Card title="Moving to Production" icon="setting">
 **CAN bus wiring:** Use twisted pair cable for CANH and CANL. Keep stub lengths under 30 cm at each node tap. For runs longer than a few meters, use shielded cable with the shield grounded at one end.
 
@@ -787,6 +817,9 @@ void CAN_PrintErrorCounters(void)
 </Card>
 
 ## What You Learned
+
+<InArticleAd />
+
 
 <Card title="Lesson 9 Summary" icon="star">
 **DMA skills:**
@@ -816,6 +849,10 @@ void CAN_PrintErrorCounters(void)
 In [Lesson 10: Capstone: Multi-Sensor Data Logger](/education/sensor-actuator-interfacing-stm32/multi-sensor-data-logger), you will combine sensors, storage, display, and wireless communication from all previous lessons into one integrated environmental monitoring station with SD card logging, OLED display, Bluetooth streaming, and alarm outputs.
 :::
 
-<Copyright />
 <SensorActuatorInterfacingStm32Comments />
+
+
+
+<InArticleAd />
 <TawkWidget />
+<Copyright />

@@ -12,14 +12,18 @@ import TawkWidget from '../../../../components/TawkWidget.astro';
 import UniversalContentContributors from '../../../../components/UniversalContentContributors.astro';
 import InArticleAd from '../../../../components/InArticleAd.astro';
 import Copyright from '../../../../components/Copyright.astro';
+import BionicText from '../../../../components/BionicText.astro';
 import TailwindWrapper from '../../../../components/TailwindWrapper.jsx';
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import { Card, CardGrid, Badge, Steps, LinkButton, FileTree } from '@astrojs/starlight/components';
-import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
-<UniversalContentContributors
+<UniversalContentContributors 
   contributors={frontmatter.contributors}
 />
+
+
+
+import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
 Motors, servos, and buzzers all need precisely timed electrical signals to function correctly. The STM32's hardware timers generate those signals autonomously, freeing the CPU to handle sensor reads, communication, and logic. In this lesson you will configure multiple timer channels for PWM output, drive servos to exact angles, control DC motor speed through an H-bridge, play tones on a passive buzzer, and measure external signal frequencies with input capture. Two potentiometers tie it all together: one controls pan, the other controls tilt, and a button toggles the DC motor with a smooth speed ramp. #STM32 #PWM #MotorControl
 
@@ -63,6 +67,7 @@ A two-axis servo mount where potentiometer 1 controls the pan servo (0 to 180 de
 
 <InArticleAd />
 
+
 The STM32F103 timers generate PWM by comparing a free-running counter against a threshold value. The counter counts from 0 up to the auto-reload register (ARR), then resets. On each count, the hardware compares the counter against the capture/compare register (CCR) for each channel and sets the output pin high or low accordingly.
 
 **Key registers for PWM:**
@@ -96,6 +101,7 @@ For a 50 Hz servo signal (20 ms period) with 1 microsecond resolution:
 ## CubeMX Timer Configuration
 
 <InArticleAd />
+
 
 Open STM32CubeIDE, create a new project for the STM32F103C8Tx, and configure the peripherals in the CubeMX graphical editor.
 
@@ -145,6 +151,9 @@ Open STM32CubeIDE, create a new project for the STM32F103C8Tx, and configure the
 
 ## Wiring
 
+<InArticleAd />
+
+
 | STM32 Pin | Connects To | Function |
 |-----------|-------------|----------|
 | PA0 | Pan servo signal (orange wire) | TIM2_CH1 PWM |
@@ -171,6 +180,7 @@ Do not power servos from the Blue Pill's 3.3V regulator. Servo stall current can
 
 <InArticleAd />
 
+
 Standard hobby servos use a 50 Hz PWM signal where the pulse width encodes the target angle. The SG90 accepts:
 
 | Pulse Width | Angle |
@@ -185,6 +195,9 @@ The mapping is linear: `pulse_us = 500 + (angle * 2000) / 180`.
 
 ## DC Motor with H-Bridge
 
+<InArticleAd />
+
+
 The L298N H-bridge controls motor direction and speed:
 
 | IN1 | IN2 | ENA (PWM) | Motor Action |
@@ -197,6 +210,9 @@ The L298N H-bridge controls motor direction and speed:
 Speed control: the PWM duty cycle on ENA determines the effective voltage applied to the motor. At 50% duty, the motor receives roughly half the supply voltage (averaged). The 1 kHz PWM frequency on TIM3_CH1 is above the audible range for most motors, reducing whine.
 
 ## Passive Buzzer Tones
+
+<InArticleAd />
+
 
 A passive buzzer contains no internal oscillator. It produces sound at whatever frequency you drive it. To play a musical note, change the TIM3 period (ARR) to match the note frequency and set the duty cycle to 50% for maximum volume.
 
@@ -221,6 +237,7 @@ Since TIM3 is shared between the motor PWM (CH1) and buzzer (CH2), changing ARR 
 
 <InArticleAd />
 
+
 Timer input capture mode records the counter value when an external signal edge arrives. This lets you measure the period (and thus frequency) of an external signal without software polling. The STM32 latches the counter into the CCR register on the configured edge and optionally triggers an interrupt.
 
 For this lesson, input capture is demonstrated as a debugging tool: you can measure the actual servo PWM frequency coming out of your own timer to verify the configuration, or measure an external signal from another device.
@@ -230,6 +247,7 @@ To configure TIM4_CH1 (PB6) as input capture in CubeMX: set Channel 1 to "Input 
 ## Complete Project Code
 
 <InArticleAd />
+
 
 The following code goes into `main.c` inside the CubeIDE-generated project. The CubeMX initialization handles all peripheral setup. This code goes in the user sections that CubeMX preserves during regeneration.
 
@@ -509,6 +527,9 @@ while (1)
 
 ## Input Capture Example
 
+<InArticleAd />
+
+
 To measure an external signal frequency using TIM4 input capture, add the following to your project. Configure TIM4_CH1 (PB6) as input capture in CubeMX and enable the TIM4 global interrupt.
 
 ```c title="input_capture.c"
@@ -555,6 +576,9 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 
 ## CubeIDE Project Structure
 
+<InArticleAd />
+
+
 <FileTree>
 - pwm_motor_control/
   - Core/
@@ -575,6 +599,9 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 
 ## Testing and Verification
 
+<InArticleAd />
+
+
 <Steps>
 1. **Flash and connect.** Build the project, flash via ST-Link, and open a serial terminal at 115200 baud. You should see the startup beeps and status messages appearing every 500 ms.
 
@@ -591,6 +618,7 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 
 <InArticleAd />
 
+
 **Servo jitter.** The SG90 can exhibit visible jitter if the PWM signal has timing noise. Common causes: interrupt handlers that run too long during a PWM update, or electrical noise on the signal line. Solutions include using hardware dead-time insertion (available on TIM1), adding a 100 nF capacitor on the servo signal line close to the servo connector, and keeping servo wires away from motor power wires.
 
 **Motor EMI.** Brushed DC motors generate significant electrical noise when commutating. A 100 nF ceramic capacitor across the motor terminals reduces radiated emissions. For the L298N, add 100 nF ceramic capacitors on the power input as close to the driver IC as possible. If the STM32 resets when the motor starts, the power supply cannot handle the inrush current: add a bulk capacitor (100 to 470 uF electrolytic) on the motor power rail.
@@ -601,6 +629,10 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 
 **Soft start for motors.** The ramp function in this project prevents inrush current spikes that could cause brown-outs. In production firmware, implement the ramp with a timer interrupt rather than polling in the main loop to ensure consistent acceleration regardless of other processing delays.
 
-<Copyright />
 <SensorActuatorInterfacingStm32Comments />
+
+
+
+<InArticleAd />
 <TawkWidget />
+<Copyright />
