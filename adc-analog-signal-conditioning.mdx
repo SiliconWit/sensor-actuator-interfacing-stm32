@@ -74,7 +74,7 @@ An environmental monitoring system that reads temperature (NTC thermistor), ambi
 <InArticleAd />
 
 
-The STM32F103C8T6 has two ADC peripherals (ADC1 and ADC2), each with 12-bit resolution and up to 1 MHz sample rate. Key parameters you need to understand before configuring the ADC:
+The STM32F103C8T6 has two ADC peripherals (ADC1 and ADC2), each with 12-bit resolution and up to 1 MHz sample rate. For a deeper look at how analog-to-digital converters work internally, including quantization, sampling theory, and DAC counterparts, see [Digital Electronics: ADC and DAC Fundamentals](/education/digital-electronics/adc-dac-fundamentals/). Key parameters you need to understand before configuring the ADC:
 
 | Parameter | Value | Why It Matters |
 |-----------|-------|---------------|
@@ -241,6 +241,8 @@ float ADC_To_Lux_Approx(uint32_t adc_value) {
 <InArticleAd />
 
 
+For a broader treatment of sensor conditioning techniques, including amplification, filtering, and level shifting, see [Analog Electronics: Sensors and Signal Conditioning](/education/analog-electronics/sensors-signal-conditioning/).
+
 ### RC Low-Pass Filter
 
 Analog signals pick up noise from nearby digital switching, power supply ripple, and electromagnetic interference. A first-order RC low-pass filter attenuates noise above its cutoff frequency:
@@ -249,7 +251,7 @@ $$
 f_c = \frac{1}{2\pi RC}
 $$
 
-For temperature monitoring, the signal changes slowly (seconds). A cutoff frequency of 1.6 kHz (R = 1K, C = 100 nF) removes high-frequency noise while passing the sensor signal through with no visible lag. Place the filter between the voltage divider output and the ADC input pin.
+For temperature monitoring, the signal changes slowly (seconds). A cutoff frequency of 1.6 kHz (R = 1K, C = 100 nF) removes high-frequency noise while passing the sensor signal through with no visible lag. Place the filter between the voltage divider output and the ADC input pin. For more on filter design and frequency response analysis, see [Analog Electronics: Filters and Frequency Response](/education/analog-electronics/filters-frequency-response/).
 
 ```
 Voltage divider output --- [1K] ---+--- PA1 (to ADC)
@@ -270,7 +272,7 @@ Voltage divider output ---> (+) LM358
                              (−) <--- output ---> PA1 (to ADC)
 ```
 
-The output follows the input exactly, but can supply milliamps of current to charge the ADC sampling capacitor instantly. The second op-amp in the LM358 package can buffer the LDR channel.
+The output follows the input exactly, but can supply milliamps of current to charge the ADC sampling capacitor instantly. The second op-amp in the LM358 package can buffer the LDR channel. For more on op-amp configurations including inverting, non-inverting, and differential amplifiers, see [Analog Electronics: Operational Amplifiers](/education/analog-electronics/operational-amplifiers/).
 
 **Rail-to-rail note.** The LM358 output cannot swing all the way to the positive rail. On a 3.3V supply, the maximum output is about 2.0 to 2.5V (depends on load). This means your ADC will never see voltages above about 2.5V from the buffered output. For a temperature sensor that operates in the 1.0 to 2.5V range, this is acceptable. If you need full 0 to 3.3V swing, use a rail-to-rail op-amp like the MCP6002 or TLV2372 instead.
 

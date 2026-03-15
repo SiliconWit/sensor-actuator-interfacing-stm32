@@ -550,7 +550,7 @@ int main(void) {
 
 **ESD protection on GPIO pins.** Any pin connected to an external cable or connector is exposed to electrostatic discharge. Add TVS diodes (e.g., PESD5V0S1BA) on the HC-SR04 echo line and the button input. Cost: a few cents per pin.
 
-**Relay flyback diode.** The relay module includes a flyback diode on the PCB. If you use a bare relay coil, you must add a 1N4148 diode across the coil (cathode to positive terminal) to absorb the inductive voltage spike when the relay turns off.
+**Relay flyback diode.** The relay module includes a flyback diode on the PCB. If you use a bare relay coil, you must add a 1N4148 diode across the coil (cathode to positive terminal) to absorb the inductive voltage spike when the relay turns off. For more on how diodes work in protection and rectification circuits, see [Analog Electronics: Diodes, Rectifiers, and Protection](/education/analog-electronics/diodes-rectifiers-protection/).
 
 **Sensor placement.** The HC-SR04 has a 15-degree cone angle. Mount it perpendicular to the surface you want to detect. Avoid placing it near walls or corners that create false echoes. The minimum measurable distance is about 2 cm.
 
