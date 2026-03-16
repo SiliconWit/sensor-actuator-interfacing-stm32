@@ -556,7 +556,7 @@ while (1)
                  "Pan: %3u deg  Tilt: %3u deg  Motor: %s (%u%%)\r\n",
                  pan_angle, tilt_angle,
                  motor_running ? "ON" : "OFF",
-                 (motor_current_duty * 100) / MOTOR_PWM_MAX);
+                 ((uint32_t)motor_current_duty * 100) / MOTOR_PWM_MAX);
         uart_print(uart_buf);
     }
 

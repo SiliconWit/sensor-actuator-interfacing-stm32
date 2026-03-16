@@ -45,7 +45,7 @@ For interfacing, the priorities shift. You are configuring I2C buses, SPI chip s
 - **Clock tree visualization**: verify that your APB1 clock gives the UART baud rate you need
 - **HAL code generation**: correct initialization sequences generated from your configuration
 - **Integrated debugger**: click-to-set breakpoints, live variable watch, no GDB command line needed
-- **One installation**: CubeIDE bundles the compiler, debugger, CubeMX, and HAL libraries
+- **Two installs, one workflow**: STM32CubeIDE (compiler, debugger, editor) and STM32CubeMX (pin configurator, code generator) work together. Starting with CubeIDE 2.0, CubeMX is a separate application
 
 **When to use the bare toolchain instead:** Custom bootloaders, safety-critical firmware that must be audited line by line, extremely tight flash constraints where HAL overhead matters, or CI/CD pipelines where a headless Makefile build is simpler. If you need to strip a binary down to 4 KB or certify every line of code for automotive/medical, the bare toolchain gives you that control. For everything else, CubeIDE is faster and less error-prone.
 
@@ -197,7 +197,7 @@ Most parts cost between 1 and 5 USD each. Many are reusable across lessons.
 ## Getting Started
 
 <Steps>
-1. **Install STM32CubeIDE.** Download from [st.com/stm32cubeide](https://www.st.com/en/development-tools/stm32cubeide.html). It is free, runs on Linux, macOS, and Windows, and includes the compiler, debugger, and CubeMX. No separate installs needed.
+1. **Install STM32CubeIDE and STM32CubeMX.** Download both from [st.com/stm32cubeide](https://www.st.com/en/development-tools/stm32cubeide.html) and [st.com/stm32cubemx](https://www.st.com/en/development-tools/stm32cubemx.html). Both are free and run on Linux, macOS, and Windows. Starting with CubeIDE 2.0, CubeMX is a separate application: you configure peripherals and generate code in CubeMX, then build and debug in CubeIDE. Lesson 1 walks through the full setup.
 
 2. **Gather Lesson 1 parts.** You need the Blue Pill, ST-Link V2 clone, HC-SR04 ultrasonic sensor, relay module, buzzer, push button, and a breadboard. If you completed the STM32 embedded course, you already have the board and programmer.
 

@@ -360,6 +360,10 @@ STM32 PA11 <-- MCP2551 RXD    CANL ---///--- CANL    MCP2551 RXD --> STM32 PA11
 <InArticleAd />
 
 
+:::note[Project structure]
+The code below is organized by function for clarity. In a CubeMX project, place all the code in the USER CODE sections of `main.c`, or create separate `.c` files with `#include "main.h"` at the top and add `extern` declarations for shared variables like `hcan`, `hadc1`, and `htim3`.
+:::
+
 ### CAN Initialization and Filter Setup
 
 ```c title="can_config.c (Node A)"
@@ -473,6 +477,8 @@ HAL_StatusTypeDef CAN_SendStatus(uint8_t flags)
 ### CAN Receive Callback (Node A)
 
 ```c title="can_rx.c (Node A)"
+extern volatile uint8_t led_toggle_request;
+
 /* Handle received CAN frames on Node A */
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan_ptr)
 {
@@ -558,7 +564,10 @@ int main(void)
             HAL_CAN_Start(&hcan);
             HAL_CAN_ActivateNotification(&hcan,
                 CAN_IT_RX_FIFO0_MSG_PENDING |
-                CAN_IT_BUSOFF);
+                CAN_IT_ERROR_WARNING |
+                CAN_IT_ERROR_PASSIVE |
+                CAN_IT_BUSOFF |
+                CAN_IT_LAST_ERROR_CODE);
         }
 
         HAL_Delay(10);
@@ -738,6 +747,7 @@ int main(void)
             HAL_CAN_Start(&hcan);
             HAL_CAN_ActivateNotification(&hcan,
                 CAN_IT_RX_FIFO0_MSG_PENDING |
+                CAN_IT_ERROR_WARNING |
                 CAN_IT_BUSOFF);
         }
 

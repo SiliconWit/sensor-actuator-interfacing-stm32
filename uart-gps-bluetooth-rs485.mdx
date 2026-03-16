@@ -205,15 +205,18 @@ void gps_start_dma(void) {
 
 The idle line interrupt fires when the UART RX line has been idle for one frame duration (about 1 ms at 9600 baud). This indicates the GPS module has finished sending its current batch of sentences.
 
-```c title="main.c"
-/* Add to USART1_IRQHandler in stm32f1xx_it.c, or use callback */
-void HAL_UART_IdleCpltCallback(UART_HandleTypeDef *huart) {
-    if (huart->Instance == USART1) {
-        gps_data_ready = 1;
-    }
-}
+```c title="stm32f1xx_it.c"
+/*
+ * Idle line detection: choose ONE of the two approaches below.
+ *
+ * APPROACH 1 (recommended): Override USART1_IRQHandler in stm32f1xx_it.c.
+ * CubeMX generates a default USART1_IRQHandler that only calls
+ * HAL_UART_IRQHandler(). Replace it with the version below so it also
+ * checks the idle flag. This is the most reliable method because the HAL
+ * does not provide a built-in idle callback.
+ */
+extern volatile uint8_t gps_data_ready;
 
-/* Override the IRQ handler to catch the idle flag */
 void USART1_IRQHandler(void) {
     if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_IDLE)) {
         __HAL_UART_CLEAR_IDLEFLAG(&huart1);
@@ -222,6 +225,10 @@ void USART1_IRQHandler(void) {
     HAL_UART_IRQHandler(&huart1);
 }
 ```
+
+:::note[Where to place the IRQ handler]
+The `USART1_IRQHandler` above replaces the CubeMX-generated version in `stm32f1xx_it.c`. Do not define it in `main.c`, or you will get a duplicate symbol error. The `gps_data_ready` variable is declared in `main.c`, so use `extern` to access it from `stm32f1xx_it.c` as shown. Make sure `__HAL_UART_ENABLE_IT(&huart1, UART_IT_IDLE)` is called before the main loop (the `gps_start_dma()` function already does this).
+:::
 
 ### Processing the DMA Buffer
 
@@ -365,11 +372,10 @@ void parse_rmc(char *sentence) {
 }
 
 void parse_gga(char *sentence) {
-    char *fix_q = nmea_field(sentence, 6);
-    char *sats  = nmea_field(sentence, 7);
-
-    gps.fix_quality = atoi(fix_q);
-    gps.satellites  = atoi(sats);
+    /* Call atoi immediately: nmea_field returns a static buffer,
+       so the next call would overwrite the previous result. */
+    gps.fix_quality = atoi(nmea_field(sentence, 6));
+    gps.satellites  = atoi(nmea_field(sentence, 7));
 }
 ```
 
@@ -424,6 +430,10 @@ void bt_send_position(void) {
     HAL_UART_Transmit(&huart2, (uint8_t*)bt_tx_buf, strlen(bt_tx_buf), 500);
 }
 ```
+
+:::tip[Linker note]
+STM32CubeIDE uses newlib-nano by default, which disables float formatting in `printf`/`snprintf`. To enable `%.1f`, go to Project Properties, C/C++ Build, Settings, MCU GCC Linker, Miscellaneous, and add `-u _printf_float` to Other flags.
+:::
 
 On the phone side, use any Bluetooth serial terminal app (such as "Serial Bluetooth Terminal" on Android). Pair with "GPS_Tracker" using PIN 1234, then connect. GPS strings will appear in the terminal every 2 seconds.
 
@@ -532,6 +542,10 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 
 
 ```c title="main.c"
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+
 /* Private variables */
 uint32_t last_relay_tick = 0;
 #define RELAY_INTERVAL_MS 2000
@@ -686,6 +700,9 @@ The NEO-6M ceramic patch antenna must face the sky with no metal above it. On a 
 **NMEA checksum validation.** Production firmware should validate the NMEA checksum before using any parsed data. The checksum is the XOR of all characters between the dollar sign and the asterisk. Corrupted sentences (from noise or buffer overruns) will fail the check and should be discarded:
 
 ```c title="main.c"
+/* This function uses strtol() from <stdlib.h>. If you add it to your
+   main.c, make sure #include <stdlib.h> is present (see the includes
+   at the top of the Complete Main Loop section). */
 uint8_t nmea_verify_checksum(const char *sentence) {
     /* Sentence format: $GPRMC,...*XX  (XX = hex checksum) */
     if (sentence[0] != '$') return 0;

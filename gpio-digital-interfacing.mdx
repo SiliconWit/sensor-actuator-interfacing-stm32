@@ -95,17 +95,81 @@ The [Embedded Programming: STM32](/education/embedded-programming-stm32/) course
 
 **When the bare toolchain is still the right choice:** custom bootloaders where you control every byte, safety-critical firmware that must be audited line by line, extremely tight flash constraints where HAL overhead matters (under 8 KB), and CI/CD pipelines where a headless Makefile build is simpler. Both toolchains produce the same ARM binary.
 
-### Creating a New Project
+### Installing STM32CubeIDE and STM32CubeMX
+
+Starting with version 2.0, STM32CubeIDE no longer bundles CubeMX. You need to install both tools separately.
+
+**Step A: Install STM32CubeIDE**
 
 <Steps>
-1. **Launch STM32CubeIDE** and select a workspace folder for this course.
+1. Go to [st.com/stm32cubeide](https://www.st.com/en/development-tools/stm32cubeide.html) and click **Get Software**. ST requires a free account to download. Select the installer for your operating system (Windows, macOS, or Linux).
 
-2. **File > New > STM32 Project**. In the Target Selection dialog, type `STM32F103C8` in the search box. Select **STM32F103C8Tx** from the list, then click **Next**.
+2. **Windows:** Run the `.exe` installer. Accept the defaults. When prompted, install the ST-Link USB drivers (check the box).
 
-3. **Name the project** `ProximityAlarm`. Select **C** as the language, **Executable** as the target type, and **STM32Cube** as the project structure. Click **Finish**.
+3. **macOS:** Open the `.dmg`, drag STM32CubeIDE to Applications. On first launch, macOS may block it. Go to System Settings > Privacy & Security and click **Open Anyway**.
 
-4. **CubeMX opens automatically**. You will see the chip pinout view. This is where you assign every pin before generating code.
+4. **Linux (Ubuntu/Debian):** Extract the `.sh` installer and run it:
+   ```bash
+   chmod +x st-stm32cubeide_*.sh
+   sudo ./st-stm32cubeide_*.sh
+   ```
+   Accept the license. The installer places the IDE in `/opt/st/stm32cubeide_*` and creates a desktop shortcut. Install the udev rules when prompted (required for ST-Link access without root).
+
+5. **Verify** by launching STM32CubeIDE. It will ask you to select a workspace folder. Create a folder like `~/STM32Projects` (or any location you prefer).
 </Steps>
+
+**Step B: Install STM32CubeMX**
+
+<Steps>
+1. Go to [st.com/stm32cubemx](https://www.st.com/en/development-tools/stm32cubemx.html) and click **Get Software**. Download the installer for your OS.
+
+2. **Windows:** Run the `.exe` installer and accept defaults.
+
+3. **macOS:** Open the `.dmg` and drag to Applications.
+
+4. **Linux:** Extract and run the installer:
+   ```bash
+   unzip en.stm32cubemx-lin*.zip
+   chmod +x SetupSTM32CubeMX-*
+   sudo ./SetupSTM32CubeMX-*
+   ```
+
+5. **Launch STM32CubeMX** to verify. On first run it may download firmware packages for your target MCU family (STM32F1 in our case). This requires an internet connection.
+</Steps>
+
+:::tip[What you now have]
+**STM32CubeIDE** provides the compiler (`arm-none-eabi-gcc`), debugger (GDB), and code editor. **STM32CubeMX** provides the graphical pin configurator, clock tree setup, and HAL code generation. In versions before 2.0, CubeMX was embedded inside CubeIDE. Now they are separate applications that work together: you configure and generate code in CubeMX, then build and debug in CubeIDE.
+:::
+
+### Creating a New Project
+
+The workflow is: create and configure the project in **CubeMX**, generate code, then **import** it into CubeIDE.
+
+**In STM32CubeMX:**
+
+<Steps>
+1. **Launch STM32CubeMX**. On the home screen, click **ACCESS TO MCU SELECTOR** (or File > New Project).
+
+2. In the MCU Selector, type `STM32F103C8` in the search box. Select **STM32F103C8Tx** from the filtered list, then click **Start Project**.
+
+3. You will see the chip pinout view. This is where you assign every pin before generating code. Configure the peripherals as described in the next section.
+
+4. After configuring all peripherals, go to the **Project Manager** tab. Set the project name to `ProximityAlarm`, choose a project location, and set **Toolchain / IDE** to **STM32CubeIDE**. Click **GENERATE CODE**.
+</Steps>
+
+**In STM32CubeIDE:**
+
+<Steps>
+1. **Launch STM32CubeIDE** and select your workspace folder.
+
+2. **File > Open Projects from File System**. Click **Directory**, browse to the project folder that CubeMX generated (e.g., `~/STM32Projects/ProximityAlarm`), and click **Finish**.
+
+3. The project appears in the Project Explorer. You can now edit `main.c`, build (hammer icon), and flash/debug (green play button or bug icon).
+</Steps>
+
+:::note[Reopening CubeMX to change pin configuration]
+If you need to change the peripheral configuration later, open the `.ioc` file in your project folder directly in STM32CubeMX (File > Open Existing Project, or double-click the `.ioc` file). After making changes, click **GENERATE CODE** again. CubeMX preserves your code inside the `/* USER CODE BEGIN */` and `/* USER CODE END */` markers.
+:::
 
 ### CubeMX Pin Configuration
 

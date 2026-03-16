@@ -25,7 +25,7 @@ import { Card, CardGrid, Badge, Steps, LinkButton, FileTree } from '@astrojs/sta
 
 import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
-I2C is the workhorse bus for low-speed peripherals: sensors, displays, EEPROMs, real-time clocks, and dozens of other chips share two wires and coexist at different addresses. In this lesson you will connect three I2C devices to a single bus on the STM32 Blue Pill, write drivers for each, and combine them into a weather station that reads environmental data, displays it on an OLED screen, and logs history to non-volatile memory. A button cycles through live readings, stored history, and min/max statistics. #STM32 #I2C #Sensors
+Dedicating separate GPIO pins and custom protocols to every peripheral does not scale. With three sensors, a display, and an EEPROM, you would burn through most of the Blue Pill's I/O just on point-to-point wiring. I2C solves this with a shared two-wire bus where every device has its own address, so five chips share two pins and coexist without conflict. In this lesson you will connect a BME280 environmental sensor, an SSD1306 OLED display, and an AT24C256 EEPROM to a single I2C bus, write drivers for each, and combine them into a weather station that shows live readings, logs history to non-volatile memory, and recalls min/max statistics at the press of a button. #STM32 #I2C #Sensors
 
 ## What We Are Building
 
@@ -832,6 +832,7 @@ static char uart_buf[128];
 /* USER CODE END PV */
 
 /* USER CODE BEGIN PFP */
+void i2c_scan(I2C_HandleTypeDef *hi2c);  /* defined in i2c_scan.c above */
 static void uart_print(const char *msg);
 static void log_reading(BME280_Data *data);
 static void load_log_header(void);
@@ -918,23 +919,27 @@ static void update_minmax(BME280_Data *data)
 static void display_live(BME280_Data *data)
 {
     char line[22];  /* 128px / 6px per char = ~21 chars at size 1 */
+    int frac;
 
     SSD1306_Clear(&oled);
     SSD1306_WriteString(&oled, 0, 0, "WEATHER STATION", 1);
 
+    frac = ((int)(data->temperature * 10)) % 10;
+    if (frac < 0) frac = -frac;
     snprintf(line, sizeof(line), "TEMP: %d.%d C",
-             (int)data->temperature,
-             ((int)(data->temperature * 10)) % 10);
+             (int)data->temperature, frac);
     SSD1306_WriteString(&oled, 0, 16, line, 1);
 
+    frac = ((int)(data->humidity * 10)) % 10;
+    if (frac < 0) frac = -frac;
     snprintf(line, sizeof(line), "HUM:  %d.%d %%",
-             (int)data->humidity,
-             ((int)(data->humidity * 10)) % 10);
+             (int)data->humidity, frac);
     SSD1306_WriteString(&oled, 0, 28, line, 1);
 
+    frac = ((int)(data->pressure * 10)) % 10;
+    if (frac < 0) frac = -frac;
     snprintf(line, sizeof(line), "PRES: %d.%d HPA",
-             (int)data->pressure,
-             ((int)(data->pressure * 10)) % 10);
+             (int)data->pressure, frac);
     SSD1306_WriteString(&oled, 0, 40, line, 1);
 
     snprintf(line, sizeof(line), "LOG: %u ENTRIES", log_count);
@@ -991,17 +996,26 @@ static void display_history(void)
 static void display_minmax(void)
 {
     char line[22];
+    int frac_a, frac_b;
     SSD1306_Clear(&oled);
     SSD1306_WriteString(&oled, 0, 0, "MIN / MAX", 1);
 
+    frac_a = ((int)(temp_min * 10)) % 10;
+    if (frac_a < 0) frac_a = -frac_a;
+    frac_b = ((int)(temp_max * 10)) % 10;
+    if (frac_b < 0) frac_b = -frac_b;
     snprintf(line, sizeof(line), "T: %d.%d / %d.%d C",
-             (int)temp_min, ((int)(temp_min * 10)) % 10,
-             (int)temp_max, ((int)(temp_max * 10)) % 10);
+             (int)temp_min, frac_a,
+             (int)temp_max, frac_b);
     SSD1306_WriteString(&oled, 0, 16, line, 1);
 
+    frac_a = ((int)(hum_min * 10)) % 10;
+    if (frac_a < 0) frac_a = -frac_a;
+    frac_b = ((int)(hum_max * 10)) % 10;
+    if (frac_b < 0) frac_b = -frac_b;
     snprintf(line, sizeof(line), "H: %d.%d / %d.%d %%",
-             (int)hum_min, ((int)(hum_min * 10)) % 10,
-             (int)hum_max, ((int)(hum_max * 10)) % 10);
+             (int)hum_min, frac_a,
+             (int)hum_max, frac_b);
     SSD1306_WriteString(&oled, 0, 28, line, 1);
 
     snprintf(line, sizeof(line), "P: %d / %d HPA",
@@ -1149,6 +1163,8 @@ while (1)
 }
 /* USER CODE END 3 */
 ```
+
+> **Linker note:** STM32CubeIDE uses newlib-nano by default, which disables float formatting in `printf`/`snprintf`. To enable `%.1f`, go to Project Properties, C/C++ Build, Settings, MCU GCC Linker, Miscellaneous, and add `-u _printf_float` to Other flags. The integer-based OLED formatting above avoids this requirement.
 
 ## CubeIDE Project Structure
 

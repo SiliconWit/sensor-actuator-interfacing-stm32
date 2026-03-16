@@ -25,7 +25,7 @@ import { Card, CardGrid, Badge, Steps, LinkButton, FileTree } from '@astrojs/sta
 
 import SensorActuatorInterfacingStm32Comments from '../../../../components/sensor-actuator-interfacing-stm32/SensorActuatorInterfacingStm32Comments.astro';
 
-RFID identification is everywhere: office badges, transit cards, warehouse inventory tags, and hotel key cards. The RC522 module gives you a low-cost 13.56 MHz RFID reader that communicates over SPI, and MIFARE Classic 1K cards provide 1 KB of readable/writable memory organized into sectors and blocks. In this lesson you will build a complete door access control system that scans cards, checks UIDs against an authorized list, provides visual and audio feedback, and displays status on an OLED screen. A designated master card lets you add or remove authorized cards without reprogramming the firmware. #STM32 #RFID #AccessControl
+A keypad requires users to remember codes, and codes get shared. A fingerprint scanner is expensive and slow. RFID cards are cheap, fast (under 100 ms to authenticate), and each card carries a unique ID that cannot be guessed. That combination of speed, cost, and security is why RFID controls access in offices, transit systems, warehouses, and hotels worldwide. In this lesson you will interface an RC522 13.56 MHz reader over SPI, read and write MIFARE Classic 1K cards, and build a complete door access control system with UID authentication, green/red LED feedback, buzzer tones, OLED status display, and a master card that adds or removes authorized cards without reflashing. #STM32 #RFID #AccessControl
 
 ## What We Are Building
 
@@ -676,6 +676,21 @@ The system uses five states to manage card scanning and authorization:
 | ACCESS_GRANTED | Green LED on, short beep, OLED shows "Access Granted" | After 2 seconds: return to IDLE |
 | ACCESS_DENIED | Red LED on, long beep, OLED shows "Access Denied" | After 2 seconds: return to IDLE |
 
+```mermaid
+%%{init: {'flowchart': {'curve': 'linear'}}}%%
+stateDiagram-v2
+    [*] --> IDLE
+    IDLE --> CARD_DETECTED : Card in range
+    CARD_DETECTED --> AUTHENTICATING : UID read OK
+    AUTHENTICATING --> ACCESS_GRANTED : UID in authorized list
+    AUTHENTICATING --> ACCESS_DENIED : UID not found
+    AUTHENTICATING --> ENROLL_MODE : Master card presented
+    ACCESS_GRANTED --> IDLE : 2s timeout
+    ACCESS_DENIED --> IDLE : 2s timeout
+    ENROLL_MODE --> IDLE : 10s timeout
+    ENROLL_MODE --> CARD_DETECTED : New card scanned\n(add or remove)
+```
+
 **Master card behavior:** The first card ever scanned when the authorized list is empty becomes the master card. When the master card is presented later, the system enters "enroll mode" for 10 seconds. During enroll mode, scanning a new card adds it to the authorized list (if not already present) or removes it (if already present). This toggling lets you manage cards without firmware changes.
 
 ## Complete Project Code
@@ -696,24 +711,67 @@ The system uses five states to manage card scanning and authorization:
 static I2C_HandleTypeDef hi2c1;
 static SPI_HandleTypeDef hspi1;
 
-/* 5x7 font subset for hex digits and common characters */
+/* 5x7 font covering printable ASCII from space (0x20) through 'Z' (0x5A) */
 static const uint8_t Font5x7[][5] = {
-    {0x3E,0x51,0x49,0x45,0x3E}, /* 0 */
-    {0x00,0x42,0x7F,0x40,0x00}, /* 1 */
-    {0x42,0x61,0x51,0x49,0x46}, /* 2 */
-    {0x21,0x41,0x45,0x4B,0x31}, /* 3 */
-    {0x18,0x14,0x12,0x7F,0x10}, /* 4 */
-    {0x27,0x45,0x45,0x45,0x39}, /* 5 */
-    {0x3C,0x4A,0x49,0x49,0x30}, /* 6 */
-    {0x01,0x71,0x09,0x05,0x03}, /* 7 */
-    {0x36,0x49,0x49,0x49,0x36}, /* 8 */
-    {0x06,0x49,0x49,0x29,0x1E}, /* 9 */
-    {0x7C,0x12,0x11,0x12,0x7C}, /* A */
-    {0x7F,0x49,0x49,0x49,0x36}, /* B */
-    {0x3E,0x41,0x41,0x41,0x22}, /* C */
-    {0x7F,0x41,0x41,0x22,0x1C}, /* D */
-    {0x7F,0x49,0x49,0x49,0x41}, /* E */
-    {0x7F,0x09,0x09,0x09,0x01}, /* F */
+    {0x00, 0x00, 0x00, 0x00, 0x00}, /* ' ' (space) */
+    {0x00, 0x00, 0x5F, 0x00, 0x00}, /* '!' */
+    {0x00, 0x07, 0x00, 0x07, 0x00}, /* '"' */
+    {0x14, 0x7F, 0x14, 0x7F, 0x14}, /* '#' */
+    {0x24, 0x2A, 0x7F, 0x2A, 0x12}, /* '$' */
+    {0x23, 0x13, 0x08, 0x64, 0x62}, /* '%' */
+    {0x36, 0x49, 0x56, 0x20, 0x50}, /* '&' */
+    {0x00, 0x08, 0x07, 0x03, 0x00}, /* '\'' */
+    {0x00, 0x1C, 0x22, 0x41, 0x00}, /* '(' */
+    {0x00, 0x41, 0x22, 0x1C, 0x00}, /* ')' */
+    {0x2A, 0x1C, 0x7F, 0x1C, 0x2A}, /* '*' */
+    {0x08, 0x08, 0x3E, 0x08, 0x08}, /* '+' */
+    {0x00, 0x80, 0x70, 0x30, 0x00}, /* ',' */
+    {0x08, 0x08, 0x08, 0x08, 0x08}, /* '-' */
+    {0x00, 0x00, 0x60, 0x60, 0x00}, /* '.' */
+    {0x20, 0x10, 0x08, 0x04, 0x02}, /* '/' */
+    {0x3E, 0x51, 0x49, 0x45, 0x3E}, /* '0' */
+    {0x00, 0x42, 0x7F, 0x40, 0x00}, /* '1' */
+    {0x72, 0x49, 0x49, 0x49, 0x46}, /* '2' */
+    {0x21, 0x41, 0x49, 0x4D, 0x33}, /* '3' */
+    {0x18, 0x14, 0x12, 0x7F, 0x10}, /* '4' */
+    {0x27, 0x45, 0x45, 0x45, 0x39}, /* '5' */
+    {0x3C, 0x4A, 0x49, 0x49, 0x31}, /* '6' */
+    {0x41, 0x21, 0x11, 0x09, 0x07}, /* '7' */
+    {0x36, 0x49, 0x49, 0x49, 0x36}, /* '8' */
+    {0x46, 0x49, 0x49, 0x29, 0x1E}, /* '9' */
+    {0x00, 0x00, 0x14, 0x00, 0x00}, /* ':' */
+    {0x00, 0x40, 0x34, 0x00, 0x00}, /* ';' */
+    {0x00, 0x08, 0x14, 0x22, 0x41}, /* '<' */
+    {0x14, 0x14, 0x14, 0x14, 0x14}, /* '=' */
+    {0x00, 0x41, 0x22, 0x14, 0x08}, /* '>' */
+    {0x02, 0x01, 0x59, 0x09, 0x06}, /* '?' */
+    {0x3E, 0x41, 0x5D, 0x59, 0x4E}, /* '@' */
+    {0x7C, 0x12, 0x11, 0x12, 0x7C}, /* 'A' */
+    {0x7F, 0x49, 0x49, 0x49, 0x36}, /* 'B' */
+    {0x3E, 0x41, 0x41, 0x41, 0x22}, /* 'C' */
+    {0x7F, 0x41, 0x41, 0x41, 0x3E}, /* 'D' */
+    {0x7F, 0x49, 0x49, 0x49, 0x41}, /* 'E' */
+    {0x7F, 0x09, 0x09, 0x09, 0x01}, /* 'F' */
+    {0x3E, 0x41, 0x41, 0x51, 0x73}, /* 'G' */
+    {0x7F, 0x08, 0x08, 0x08, 0x7F}, /* 'H' */
+    {0x00, 0x41, 0x7F, 0x41, 0x00}, /* 'I' */
+    {0x20, 0x40, 0x41, 0x3F, 0x01}, /* 'J' */
+    {0x7F, 0x08, 0x14, 0x22, 0x41}, /* 'K' */
+    {0x7F, 0x40, 0x40, 0x40, 0x40}, /* 'L' */
+    {0x7F, 0x02, 0x1C, 0x02, 0x7F}, /* 'M' */
+    {0x7F, 0x04, 0x08, 0x10, 0x7F}, /* 'N' */
+    {0x3E, 0x41, 0x41, 0x41, 0x3E}, /* 'O' */
+    {0x7F, 0x09, 0x09, 0x09, 0x06}, /* 'P' */
+    {0x3E, 0x41, 0x51, 0x21, 0x5E}, /* 'Q' */
+    {0x7F, 0x09, 0x19, 0x29, 0x46}, /* 'R' */
+    {0x26, 0x49, 0x49, 0x49, 0x32}, /* 'S' */
+    {0x03, 0x01, 0x7F, 0x01, 0x03}, /* 'T' */
+    {0x3F, 0x40, 0x40, 0x40, 0x3F}, /* 'U' */
+    {0x1F, 0x20, 0x40, 0x20, 0x1F}, /* 'V' */
+    {0x3F, 0x40, 0x38, 0x40, 0x3F}, /* 'W' */
+    {0x63, 0x14, 0x08, 0x14, 0x63}, /* 'X' */
+    {0x03, 0x04, 0x78, 0x04, 0x03}, /* 'Y' */
+    {0x61, 0x59, 0x49, 0x4D, 0x43}, /* 'Z' */
 };
 
 static uint8_t oled_buffer[1024]; /* 128x64 / 8 = 1024 bytes */
@@ -772,14 +830,10 @@ static void SSD1306_SetPixel(uint8_t x, uint8_t y, uint8_t on)
 
 static void SSD1306_DrawChar(uint8_t x, uint8_t y, char c)
 {
-    int idx = -1;
-    if (c >= '0' && c <= '9') idx = c - '0';
-    else if (c >= 'A' && c <= 'F') idx = c - 'A' + 10;
-    else if (c >= 'a' && c <= 'f') idx = c - 'a' + 10;
-    if (idx < 0) return;
+    if (c < ' ' || c > 'Z') return;
 
     for (uint8_t col = 0; col < 5; col++) {
-        uint8_t line = Font5x7[idx][col];
+        uint8_t line = Font5x7[c - ' '][col];
         for (uint8_t row = 0; row < 7; row++) {
             SSD1306_SetPixel(x + col, y + row, (line >> row) & 1);
         }
@@ -789,16 +843,11 @@ static void SSD1306_DrawChar(uint8_t x, uint8_t y, char c)
 static void SSD1306_DrawString(uint8_t x, uint8_t y, const char *str)
 {
     while (*str) {
-        if (*str == ' ') { x += 6; str++; continue; }
-        if (*str == ':') { x += 6; str++; continue; }
         SSD1306_DrawChar(x, y, *str);
         x += 6;
         str++;
     }
 }
-
-/* For messages using a minimal ASCII font approach, we draw raw text.
-   For hex UID display, SSD1306_DrawString handles 0-9, A-F. */
 
 /* --- Indicator control --- */
 static void LED_Green(uint8_t on) {
@@ -1145,10 +1194,12 @@ int main(void)
     }
 }
 
-void SysTick_Handler(void)
-{
-    HAL_IncTick();
-}
+/*
+ * NOTE: Do not define SysTick_Handler here. CubeMX already generates one
+ * in stm32f1xx_it.c that calls HAL_IncTick(). If you need to add custom
+ * tick-based logic, place it inside the existing SysTick_Handler in
+ * Core/Src/stm32f1xx_it.c rather than defining a duplicate here.
+ */
 ```
 
 ## CubeMX Project Structure
@@ -1187,8 +1238,11 @@ Beyond UID-based access, you can store data on the card itself. Each sector (exc
 
 **To read a block after authentication:**
 
+The following snippet is not a standalone file. Add this code inside one of the `/* USER CODE BEGIN */` sections in your `main.c` (for example, inside the main loop or a helper function). It assumes you already have `card_uid` populated from a successful `RC522_Anticoll()` call:
+
 ```c title="read_example.c"
 uint8_t key[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};  /* Default key */
+uint8_t card_uid[4];   /* Filled by RC522_Anticoll() during card detection */
 uint8_t block_data[18];  /* 16 bytes data + 2 bytes CRC */
 uint8_t block_addr = 4;  /* First block of sector 1 */
 
@@ -1203,7 +1257,11 @@ if (RC522_Auth(PICC_AUTHENT1A, block_addr, key, card_uid) == MI_OK) {
 
 **To write data to a block:**
 
+Like the read example above, this is a fragment for your `main.c` USER CODE section. It reuses the same `key` and `card_uid` variables declared in the read example:
+
 ```c title="write_example.c"
+uint8_t key[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};  /* Default key */
+uint8_t card_uid[4];   /* Filled by RC522_Anticoll() during card detection */
 uint8_t write_data[16] = "Access:Employee";  /* 16 bytes of data */
 uint8_t block_addr = 5;  /* Sector 1, block 1 */
 
