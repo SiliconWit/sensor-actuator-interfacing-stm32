@@ -134,7 +134,14 @@ Starting with version 2.0, STM32CubeIDE no longer bundles CubeMX. You need to in
    sudo ./SetupSTM32CubeMX-*
    ```
 
-5. **Launch STM32CubeMX** to verify. On first run it may download firmware packages for your target MCU family (STM32F1 in our case). This requires an internet connection.
+5. **Launch STM32CubeMX** to verify:
+   - **Windows:** Search for "STM32CubeMX" in the Start menu, or run `STM32CubeMX.exe` from the installation folder.
+   - **macOS:** Open from Applications, or run from Terminal: `open -a STM32CubeMX`.
+   - **Linux:** The installer does not always create a desktop shortcut. Launch from terminal:
+     ```bash
+     /usr/local/STMicroelectronics/STM32Cube/STM32CubeMX/STM32CubeMX &
+     ```
+   On first run it may download firmware packages for your target MCU family (STM32F1 in our case). This requires an internet connection.
 </Steps>
 
 :::tip[What you now have]
@@ -154,17 +161,21 @@ The workflow is: create and configure the project in **CubeMX**, generate code, 
 
 3. You will see the chip pinout view. This is where you assign every pin before generating code. Configure the peripherals as described in the next section.
 
-4. After configuring all peripherals, go to the **Project Manager** tab. Set the project name to `ProximityAlarm`, choose a project location, and set **Toolchain / IDE** to **STM32CubeIDE**. Click **GENERATE CODE**.
+4. After configuring all peripherals, go to the **Project Manager** tab. Set the project name to `ProximityAlarm`, choose a project location (create a dedicated subfolder for the project, not the same folder as the CubeIDE workspace), and set **Toolchain / IDE** to **STM32CubeIDE**. Click **GENERATE CODE**. If CubeMX prompts you to download the firmware package (STM32Cube FW_F1), click **Yes**. This downloads the HAL library for the STM32F1 family and only needs to happen once.
 </Steps>
 
 **In STM32CubeIDE:**
 
 <Steps>
-1. **Launch STM32CubeIDE** and select your workspace folder.
+1. **Launch STM32CubeIDE**. When it asks for a workspace folder, choose a location that is NOT inside your project folder (e.g., `~/STM32CubeIDE/workspace_2.1.0`). The workspace stores CubeIDE's internal settings; the project folder is separate.
 
-2. **File > Open Projects from File System**. Click **Directory**, browse to the project folder that CubeMX generated (e.g., `~/STM32Projects/ProximityAlarm`), and click **Finish**.
+2. If you see the **Information Center** welcome screen, close it (click the X on its tab) so you can see the main IDE.
 
-3. The project appears in the Project Explorer. You can now edit `main.c`, build (hammer icon), and flash/debug (green play button or bug icon).
+3. **Import the project**: go to **File > Import**, expand **General**, select **Existing Projects into Workspace**, click **Next**. Click **Browse** next to "Select root directory" and navigate to the project folder that CubeMX generated (e.g., `~/STM32Projects/ProximityAlarm`). The project name should appear with a checkbox. Click **Finish**.
+
+4. If the **Project Explorer** is not visible on the left side, go to **Window > Show View > Project Explorer**. You should see your project with `Core/`, `Drivers/`, and the `.ioc` file.
+
+5. **Build** the project by clicking the **hammer icon** in the toolbar (or Ctrl+B). The Console panel at the bottom shows the build output. You should see "0 errors, 0 warnings" on a fresh CubeMX-generated project.
 </Steps>
 
 :::note[Reopening CubeMX to change pin configuration]
@@ -174,11 +185,16 @@ If you need to change the peripheral configuration later, open the `.ioc` file i
 ### CubeMX Pin Configuration
 
 <Steps>
-1. **System Core > SYS**: set Debug to **Serial Wire**. This reserves PA13 (SWDIO) and PA14 (SWCLK) for the ST-Link.
+1. You should be on the **Pinout & Configuration** tab (the default view after creating the project). In the left panel under **System Core**, click **SYS** and set Debug to **Serial Wire**. This reserves PA13 (SWDIO) and PA14 (SWCLK) for the ST-Link.
 
-2. **System Core > RCC**: set HSE to **Crystal/Ceramic Resonator**. Go to the Clock Configuration tab and set PLL source to HSE, PLL multiplier to x9, SYSCLK to 72 MHz, APB1 prescaler to /2 (36 MHz max).
+2. Still in the left panel under **System Core**, click **RCC** and set High Speed Clock (HSE) to **Crystal/Ceramic Resonator**. Now click the **Clock Configuration** tab at the top of the window. In the clock tree diagram:
+   - **PLL Source Mux**: select the **HSE** radio button (bottom path)
+   - **PLLMul**: set to **x 9** (8 MHz x 9 = 72 MHz)
+   - **System Clock Mux**: click the **PLLCLK** radio button (not HSI). SYSCLK should now show 72 MHz.
+   - **APB1 Prescaler**: set to **/2** (APB1 max is 36 MHz)
+   - HCLK should now read **72 MHz**.
 
-3. **Configure GPIO outputs**: click each pin on the chip view and select GPIO_Output:
+3. Go back to the **Pinout & Configuration** tab. **Configure GPIO outputs** by clicking each pin on the chip view and selecting GPIO_Output:
    - **PA1**: HC-SR04 Trigger
    - **PA3**: Relay module
    - **PA4**: Buzzer
@@ -188,12 +204,33 @@ If you need to change the peripheral configuration later, open the `.ioc` file i
 
 4. **Configure GPIO input for Echo**: click **PA2** and select GPIO_Input.
 
-5. **Configure the push button with EXTI**: click **PB12** and select **GPIO_EXTI12**. In the GPIO configuration panel, set the pull mode to **Pull-up** and the trigger to **Falling edge** (button connects to GND when pressed).
+5. **Configure the push button with EXTI**: click **PB12** on the chip pinout view and select **GPIO_EXTI12** from the dropdown (the pin turns green). Then go to **System Core > GPIO** in the left panel and click the **GPIO Settings** tab at the bottom. Click the **PB12** row in the list. Set **GPIO Pull-up/Pull-down** to **Pull-up** and verify that GPIO mode shows **External Interrupt Mode with Falling edge trigger detection** (button connects to GND when pressed).
 
 6. **Enable the EXTI interrupt**: go to **System Core > NVIC** and enable **EXTI line[15:10] interrupt**. Set its priority to 1 (lower than SysTick at 0).
 
-7. **Generate code**: press **Ctrl+S** or click the gear icon. CubeIDE generates the project with all initialization code in place.
+7. **Before generating code**, click the **Project Manager** tab at the top. Verify that **Toolchain / IDE** is set to **STM32CubeIDE** (not EWARM or MDK-ARM). Set the project name and location if you have not already. Then click **GENERATE CODE** (top right corner) or go back to Pinout & Configuration and press **Ctrl+S**.
 </Steps>
+
+:::tip[Verify your configuration before generating]
+Double-check these settings in CubeMX before clicking GENERATE CODE:
+
+| Setting | Expected Value |
+|---------|---------------|
+| SYS Debug | Serial Wire |
+| HSE | Crystal/Ceramic Resonator |
+| SYSCLK (Clock Config tab) | 72 MHz via PLLCLK (HSE x9) |
+| APB1 Prescaler | /2 (36 MHz) |
+| PA1 | GPIO_Output (Trigger) |
+| PA2 | GPIO_Input (Echo) |
+| PA3 | GPIO_Output (Relay) |
+| PA4 | GPIO_Output (Buzzer) |
+| PB0 | GPIO_Output (Green LED) |
+| PB1 | GPIO_Output (Red LED) |
+| PC13 | GPIO_Output (Onboard LED) |
+| PB12 | GPIO_EXTI12, Pull-up, Falling edge |
+| NVIC EXTI15_10 | Enabled, Priority 1 |
+| Toolchain / IDE | STM32CubeIDE |
+:::
 
 ### Generated Project Structure
 
@@ -216,6 +253,10 @@ If you need to change the peripheral configuration later, open the `.ioc` file i
 </FileTree>
 
 All your application code goes between the `/* USER CODE BEGIN */` and `/* USER CODE END */` markers in `main.c`. CubeMX preserves these sections when you regenerate code after changing pin assignments.
+
+:::tip[Reference .ioc file]
+If you want to verify your configuration or start from a known-good setup, a reference CubeMX `.ioc` file for this lesson is available in the [course GitHub repository](https://github.com/SiliconWit/sensor-actuator-interfacing-stm32/tree/main/codes/lesson-01-proximity-alarm). Open it in CubeMX (File > Open Existing Project) and click GENERATE CODE to produce the full project.
+:::
 
 ## GPIO Output: LEDs, Relay, and Buzzer
 
