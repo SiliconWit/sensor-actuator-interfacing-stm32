@@ -185,25 +185,70 @@ Both the BME280 and OLED share the same I2C bus. Use one pair of 4.7K pull-up re
 <InArticleAd />
 
 
+Follow the CubeMX and CubeIDE setup from [Lesson 1](/education/sensor-actuator-interfacing-stm32/gpio-digital-interfacing/#creating-a-new-project) if this is your first project. The steps below assume you can create a new STM32F103C8Tx project, set up the clock, and import into CubeIDE.
+
 <Steps>
-1. **Create new project** for STM32F103C8T6 following the CubeMX and CubeIDE setup from [Lesson 1](/education/sensor-actuator-interfacing-stm32/gpio-digital-interfacing/#creating-a-new-project). Name the project `MultiSensorLogger`.
+1. **Create new project** in CubeMX for STM32F103C8Tx. Set **SYS** Debug to Serial Wire, **RCC** HSE to Crystal/Ceramic Resonator. In the **Clock Configuration** tab, set PLL Source to HSE, PLLMul to x9, System Clock Mux to PLLCLK, APB1 Prescaler to /2. HCLK should show 72 MHz.
 
-2. **Enable I2C1:** Under Connectivity, enable I2C1. Set speed to Fast Mode (400 kHz). SCL = PB6, SDA = PB7.
+2. **USART2:** In the **Pinout & Configuration** tab, expand **Connectivity** in the left panel, click **USART2**, set Mode to **Asynchronous**. In Parameter Settings, set Baud Rate to **115200**. PA2 (TX) and PA3 (RX) turn green.
 
-3. **Enable SPI1:** Under Connectivity, enable SPI1 in Full-Duplex Master mode. Set Prescaler for 4.5 MHz (prescaler = 16 from 72 MHz). Configure PA4 as GPIO Output for chip select.
+3. **ADC1:** Expand **Analog**, click **ADC1**. Check **IN0** (PA0 for potentiometer) and **Temperature Sensor Channel** (internal temp, IN16).
 
-4. **Enable USART2:** Under Connectivity, enable USART2 in Asynchronous mode. Baud rate = 9600 (HC-05 default).
+4. **I2C1:** Under **Connectivity**, click **I2C1**, set Mode to **I2C**. In Parameter Settings, set I2C Speed Mode to **Fast Mode** (400 kHz). PB6 (SCL) and PB7 (SDA) turn green.
 
-5. **Enable ADC1:** Under Analog, enable ADC1 Channel 0 (PA0). Continuous mode disabled (we poll manually).
+5. **SPI1:** Under **Connectivity**, click **SPI1**, set Mode to **Full-Duplex Master**. In Parameter Settings (under Clock Parameters), set Prescaler to **16** (4.5 MHz). PA5 (SCK), PA6 (MISO), PA7 (MOSI) turn green. Then click **PA4** on the chip view and select **GPIO_Output** (SD card chip select).
 
-6. **Configure GPIO outputs:** PB12 (relay), PB13 (buzzer), PB14 (green LED), PB15 (yellow LED), PA8 (red LED). All push-pull, no pull-up.
+6. **GPIO outputs:** Click each pin on the chip view and select **GPIO_Output**: **PB12** (relay), **PB13** (buzzer), **PB14** (green LED), **PB15** (yellow LED), **PA8** (red LED), **PC13** (onboard heartbeat LED).
 
-7. **Configure GPIO inputs:** PB0 (button 1), PB1 (button 2). Both with internal pull-up enabled.
+7. **GPIO inputs:** Click **PB0** on the chip view and select **GPIO_Input**. Click **PB1** and select **GPIO_Input**. Then go to **System Core > GPIO**, click **GPIO Settings** tab at the bottom, click the **PB0** row and set Pull-up/Pull-down to **Pull-up**. Do the same for **PB1**.
 
-8. **Enable IWDG:** Under System Core, enable the Independent Watchdog. Prescaler = 64, Reload = 4095. This gives roughly 4 seconds before reset.
+8. **Project Manager:** Click the **Project Manager** tab. Set Project Name to `MultiSensorLogger`, choose a project location, verify Toolchain / IDE is **STM32CubeIDE**. Click **GENERATE CODE**.
 
-9. **Generate code** and open main.c.
+9. **Import into CubeIDE:** File > Import > General > Existing Projects into Workspace. Browse to the MultiSensorLogger folder. Build with Ctrl+B. You should see 0 errors, 0 warnings.
 </Steps>
+
+Your CubeMX configuration should match these after completing the steps above:
+
+![CubeMX pinout configuration for the Multi-Sensor Data Logger](https://cdn.siliconwit.com/education/sensor-actuator-interfacing-stm32/multi-sensor-data-logger-cubemx-pinout-configuration.jpg)
+
+![CubeMX clock configuration for the Multi-Sensor Data Logger](https://cdn.siliconwit.com/education/sensor-actuator-interfacing-stm32/multi-sensor-data-logger-cubemx-clock-configuration.jpg)
+
+### Generated Project Structure
+
+After CubeMX generates and CubeIDE imports, you should see:
+
+<FileTree>
+- MultiSensorLogger/
+  - Core/
+    - Inc/
+      - main.h
+      - stm32f1xx_hal_conf.h
+      - stm32f1xx_it.h
+    - Src/
+      - main.c
+      - stm32f1xx_hal_msp.c
+      - stm32f1xx_it.c
+      - syscalls.c
+      - sysmem.c
+      - system_stm32f1xx.c
+    - Startup/
+      - startup_stm32f103c8tx.s
+  - Drivers/
+    - CMSIS/
+    - STM32F1xx_HAL_Driver/
+  - MultiSensorLogger.ioc
+  - STM32F103C8TX_FLASH.ld
+</FileTree>
+
+This is the base CubeMX output. As we add the capstone code, we will create additional files inside `Core/Inc/` and `Core/Src/`.
+
+:::tip[Reference .ioc file]
+A reference CubeMX `.ioc` file for this capstone is available in the [course GitHub repository](https://github.com/SiliconWit/sensor-actuator-interfacing-stm32/tree/main/codes/lesson-10-capstone). Open it in CubeMX (File > Open Existing Project) and click GENERATE CODE to produce the full project.
+:::
+
+:::tip[Verify your configuration]
+After generating, check that `main.c` contains these init calls: `MX_GPIO_Init()`, `MX_ADC1_Init()`, `MX_I2C1_Init()`, `MX_SPI1_Init()`, `MX_USART2_UART_Init()`. If any are missing, reopen the `.ioc` in CubeMX and verify the peripheral is enabled.
+:::
 
 ## Peripheral Initialization Order
 
