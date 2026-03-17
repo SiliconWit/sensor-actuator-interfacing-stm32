@@ -64,6 +64,18 @@ A proximity alarm that measures distance with an HC-SR04 ultrasonic sensor. When
 | On-board LED | PC13 (GPIO Output, active low) |
 | Debugger | ST-Link V2 clone over SWD |
 
+:::note[WeAct Blue Pill Plus]
+The WeAct Blue Pill Plus has its user LED on **PB2** (active low) instead of PC13. If you have a WeAct board, toggle PB2 as well as PC13 in your heartbeat code so it works with either board variant. The rest of the pinout is identical to the generic Blue Pill.
+:::
+
+:::note[Flashing on older Linux]
+STM32CubeIDE 2.1.0 requires GLIBC 2.34+ for its built-in GDB server. On Ubuntu 20.04 (GLIBC 2.31), the Run button fails with a GLIBC error. Use `st-flash` from the [stlink tools](https://github.com/stlink-org/stlink) package instead:
+```bash
+arm-none-eabi-objcopy -O binary Debug/*.elf Debug/firmware.bin
+st-flash --reset write Debug/firmware.bin 0x08000000
+```
+:::
+
 ### Bill of Materials
 
 | Component | Quantity | Notes |

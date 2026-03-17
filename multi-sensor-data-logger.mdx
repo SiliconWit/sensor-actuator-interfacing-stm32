@@ -468,11 +468,11 @@ uint8_t BME280_Read(I2C_HandleTypeDef *hi2c, float *temp, float *hum, float *pre
 
 #include "main.h"
 
-void SSD1306_Init(I2C_HandleTypeDef *hi2c);
+uint8_t SSD1306_Init(I2C_HandleTypeDef *hi2c);
 void SSD1306_Clear(void);
-void SSD1306_SetCursor(uint8_t x, uint8_t y);
-void SSD1306_WriteString(const char *str);
-void SSD1306_Update(void);
+void SSD1306_SetPixel(uint8_t x, uint8_t y, uint8_t on);
+void SSD1306_WriteString(uint8_t x, uint8_t y, const char *str);
+void SSD1306_Update(I2C_HandleTypeDef *hi2c);
 
 #endif
 ```
@@ -525,10 +525,13 @@ extern const uint8_t font5x7[][5];
 void SSD1306_WriteString(uint8_t x, uint8_t y, const char *str)
 {
     while (*str && x < SSD1306_WIDTH - 5) {
-        for (int i = 0; i < 5; i++) {
-            uint8_t col = font5x7[(uint8_t)*str - 32][i];
-            for (int bit = 0; bit < 7; bit++) {
-                SSD1306_SetPixel(x + i, y + bit, (col >> bit) & 1);
+        uint8_t c = (uint8_t)*str;
+        if (c >= 32 && c <= 90) {
+            for (int i = 0; i < 5; i++) {
+                uint8_t col = font5x7[c - 32][i];
+                for (int bit = 0; bit < 7; bit++) {
+                    SSD1306_SetPixel(x + i, y + bit, (col >> bit) & 1);
+                }
             }
         }
         x += 6;
@@ -1149,22 +1152,39 @@ int main(void)
 <InArticleAd />
 
 
+### Flashing the Firmware
+
+In CubeIDE, click the **Run** button (green play icon) or use **Run > Run As > STM32 C/C++ Application**. If CubeIDE's built-in GDB server fails (common on Ubuntu 20.04 or older due to GLIBC version requirements), flash from the command line instead:
+
+```bash
+arm-none-eabi-objcopy -O binary Debug/codes.elf Debug/codes.bin
+st-flash --reset write Debug/codes.bin 0x08000000
+```
+
+The `--reset` flag resets the MCU after flashing so it starts running immediately. Without it, you need to press the NRST button on the Blue Pill.
+
+:::note[WeAct Blue Pill onboard LED]
+The WeAct Blue Pill Plus has its user LED on **PB2** (active low), not PC13 like generic Blue Pill clones. The firmware toggles both PB2 and PC13 so it works with either board variant. A blinking LED confirms the firmware is running.
+:::
+
+### Test Sequence
+
 <Steps>
-1. **Flash the firmware** using ST-Link and STM32CubeIDE.
+1. **Check the onboard LED.** After flashing, the LED should blink at roughly 1 Hz (500 ms on, 500 ms off). This confirms the firmware is running and the main loop is executing.
 
-2. **Check the OLED** first. It should display temperature, humidity, and pressure readings on the live data page. If the display is blank, check I2C wiring and pull-ups.
+2. **Check the OLED.** It should briefly show "MULTI-SENSOR DATA LOGGER INITIALIZING..." then switch to the live data page showing temperature, threshold, pot value, uptime, and alarm status. If the display is blank, check I2C wiring (PB6 = SCL, PB7 = SDA) and verify VCC is connected to 3.3V.
 
-3. **Verify the potentiometer.** Turn it fully clockwise and counterclockwise. The threshold value on the OLED should move between 15.0 and 50.0 degrees C.
+3. **Verify the potentiometer.** Turn the knob. The THR value on the OLED should change between 15.0 and 50.0 degrees C. The POT value shows the raw ADC reading (0 to 4095). Any potentiometer value from 1K to 100K works. If no potentiometer is connected, the value will float randomly.
 
-4. **Test the SD card.** Remove the card, insert it into a computer, and check for datalog.csv. The file should contain CSV rows with timestamped sensor readings.
+4. **Trigger the alarm.** Turn the potentiometer so THR drops below the current temperature reading (T). The OLED should switch from "ARMED - OK" to "** ALARM **". If LEDs and a buzzer are connected, the red LED (PA8) lights up, the relay (PB12) activates, and the buzzer (PB13) sounds.
 
-5. **Pair the HC-05** with your phone or computer. Open a Bluetooth serial terminal. You should see JSON lines arriving every 2 seconds.
+5. **Test button functions** (if connected). Button 1 (PB0 to GND) cycles display pages. Button 2 (PB1 to GND) arms and disarms the alarm. Buttons use internal pull-ups, so each button connects between the pin and GND with no external resistor.
 
-6. **Trigger the alarm.** Set the potentiometer so the threshold is below the current room temperature. The relay should click, the buzzer should sound a beep-beep-pause pattern, and the red LED should light up.
+6. **Add the BME280 sensor.** Connect to the same I2C bus as the OLED (PB6 SCL, PB7 SDA, 3.3V, GND). Both devices share the bus at different addresses (OLED = 0x3C, BME280 = 0x76).
 
-7. **Test button functions.** Press button 1 to cycle through display pages (live data, min/max, log count, system info). Press button 2 to arm and disarm the alarm.
+7. **Test the SD card.** After adding SD card logging code, remove the card, insert it into a computer, and check for datalog.csv with timestamped sensor readings.
 
-8. **Test error recovery.** Pull the SD card while running. The system should continue operating, and the system info page should show "SD: FAIL". Reinsert the card and the logger should resume.
+8. **Pair the HC-05** Bluetooth module. Open a serial terminal on your phone or computer. JSON lines should arrive every 2 seconds.
 </Steps>
 
 ## Power Considerations

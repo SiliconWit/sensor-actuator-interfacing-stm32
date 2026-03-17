@@ -1,9 +1,21 @@
-# Sensor-Actuator Interfacing STM32: Reference Projects
+Sensor-Actuator Interfacing STM32: Reference Projects
 
-Each folder contains a `.ioc` file (STM32CubeMX project) for the corresponding lesson. To use:
+Each folder contains reference files for the corresponding lesson.
 
-1. Open the `.ioc` file in STM32CubeMX (File > Open Existing Project)
-2. Click GENERATE CODE to regenerate the full project
-3. Import into STM32CubeIDE (File > Import > General > Existing Projects into Workspace)
+lesson-01-proximity-alarm/
+  ProximityAlarm.ioc    CubeMX config for Lesson 1
 
-These are reference configurations. Your own project should produce the same pin assignments and clock settings.
+lesson-10-capstone/
+  MultiSensorLogger.ioc CubeMX config for capstone (all peripherals)
+  main.c                Step 1 working code: internal temp, OLED,
+                        potentiometer threshold, alarm GPIO, buttons
+
+To use the .ioc files:
+  1. Open in STM32CubeMX (File > Open Existing Project)
+  2. Click GENERATE CODE
+  3. Import into STM32CubeIDE (File > Import > General > Existing Projects)
+
+To use main.c:
+  Copy main.c into your project's Core/Src/ folder, replacing the
+  CubeMX-generated main.c. The USER CODE sections contain all application
+  logic. Rebuild in CubeIDE.
