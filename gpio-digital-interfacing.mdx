@@ -270,6 +270,10 @@ All your application code goes between the `/* USER CODE BEGIN */` and `/* USER 
 If you want to verify your configuration or start from a known-good setup, a reference CubeMX `.ioc` file for this lesson is available in the [course GitHub repository](https://github.com/SiliconWit/sensor-actuator-interfacing-stm32/tree/main/codes/lesson-01-proximity-alarm). Open it in CubeMX (File > Open Existing Project) and click GENERATE CODE to produce the full project.
 :::
 
+:::note[What is in the GitHub repository]
+The course repository contains the `.ioc` file and custom source files. The `Drivers/` and `Debug/` folders are not included because CubeMX regenerates `Drivers/` when you click GENERATE CODE, and CubeIDE regenerates `Debug/` when you build. CubeMX pulls the HAL library from the firmware package (STM32Cube FW_F1) that it downloads on first use. If you have not downloaded it yet, CubeMX will prompt you when you click GENERATE CODE. This way you always get the HAL version that matches your CubeMX installation, avoiding version mismatch issues that cause hard to trace compile errors.
+:::
+
 ## GPIO Output: LEDs, Relay, and Buzzer
 
 <InArticleAd />

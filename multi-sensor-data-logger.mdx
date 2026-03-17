@@ -250,6 +250,10 @@ A reference CubeMX `.ioc` file for this capstone is available in the [course Git
 After generating, check that `main.c` contains these init calls: `MX_GPIO_Init()`, `MX_ADC1_Init()`, `MX_I2C1_Init()`, `MX_SPI1_Init()`, `MX_USART2_UART_Init()`. If any are missing, reopen the `.ioc` in CubeMX and verify the peripheral is enabled.
 :::
 
+:::note[What is in the GitHub repository]
+The [course repository](https://github.com/SiliconWit/sensor-actuator-interfacing-stm32/tree/main/codes/lesson-10-capstone) contains the `.ioc` file and custom source files (`main.c`, driver files). The `Drivers/` and `Debug/` folders are not included because CubeMX regenerates `Drivers/` when you click GENERATE CODE, and CubeIDE regenerates `Debug/` when you build. CubeMX pulls the HAL library from the firmware package (STM32Cube FW_F1) that it downloads on first use. If you have not downloaded it yet, CubeMX will prompt you when you click GENERATE CODE. This way you always get the HAL version that matches your CubeMX installation, avoiding version mismatch issues that cause hard to trace compile errors.
+:::
+
 ## Peripheral Initialization Order
 
 <InArticleAd />
